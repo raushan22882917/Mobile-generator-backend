@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y --no-install-recommends nodejs \
     && corepack enable \
     && corepack prepare npm@latest --activate \
+    && npm install --global npm@latest \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
