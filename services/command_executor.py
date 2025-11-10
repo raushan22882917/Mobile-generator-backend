@@ -187,7 +187,7 @@ class CommandExecutor:
         create_result = await self.run_command(
             command=(
                 f"npm create expo-app@latest {app_name} "
-                f"-- --template blank --yes --package-manager npm"
+                f"-- --template blank --yes"
             ),
             cwd=parent_dir,
             timeout=timeout or 180  # 3 minutes for project creation
