@@ -185,7 +185,10 @@ class CommandExecutor:
         
         # Create Expo project using npx create-expo-app and cd into it
         create_result = await self.run_command(
-            command=f"npx create-expo-app@latest {app_name} && cd {app_name}",
+            command=(
+                f"npm create expo-app@latest {app_name} "
+                f"-- --template blank --yes --package-manager npm"
+            ),
             cwd=parent_dir,
             timeout=timeout or 180  # 3 minutes for project creation
         )
@@ -256,7 +259,7 @@ class CommandExecutor:
         # Step 2: Verify expo CLI is available
         logger.info("Verifying Expo CLI...")
         expo_check = await self.run_command(
-            command="npx expo --version",
+            command="npm exec expo -- --version",
             cwd=project_dir,
             timeout=30
         )
@@ -337,7 +340,9 @@ class CommandExecutor:
             if sys.platform == 'win32':
                 # Windows: use shell to find npx in PATH
                 # Enable web, disable tunnel (we use ngrok), enable LAN access
-                cmd = f'npx expo start --port {port} --web --lan'
+                cmd = (
+                    f"npm exec expo -- start --port {port} --web --lan"
+                )
                 process = await asyncio.create_subprocess_shell(
                     cmd,
                     cwd=project_dir,
@@ -348,8 +353,10 @@ class CommandExecutor:
             else:
                 # Unix: use exec
                 process = await asyncio.create_subprocess_exec(
-                    "npx",
+                    "npm",
+                    "exec",
                     "expo",
+                    "--",
                     "start",
                     "--port",
                     str(port),
