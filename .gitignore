@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+*.egg-info/
+dist/
+build/
+
+# Testing
+.pytest_cache/
+tests/
+*.coverage
+htmlcov/
+
+# Environment
+.env
+service-account-key.json
+
+# Projects directory
+projects/
+
+# Logs
+*.log
