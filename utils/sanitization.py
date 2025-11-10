@@ -16,10 +16,9 @@ class SanitizationError(ValueError):
 
 # Dangerous patterns that could indicate command injection attempts
 DANGEROUS_PATTERNS = [
-    r'[;&|`$]',  # Shell command separators and substitution
+    r'[;&|`]',  # Shell command separators (removed $ as it's common in text)
     r'\$\(',  # Command substitution
-    r'\.\.',  # Directory traversal
-    r'[\r\n]',  # Newline characters
+    r'\.\.\/',  # Directory traversal (more specific pattern)
     r'<script',  # Script tags (case insensitive)
     r'javascript:',  # JavaScript protocol
     r'on\w+\s*=',  # Event handlers (onclick, onerror, etc.)
@@ -66,8 +65,9 @@ def sanitize_prompt(prompt: str, max_length: int = 5000) -> str:
             )
     
     # Check for excessive special characters (potential obfuscation)
-    special_char_count = sum(1 for c in prompt if not c.isalnum() and not c.isspace())
-    if special_char_count > len(prompt) * 0.3:  # More than 30% special characters
+    # Allow common punctuation: . , ! ? ' " - : ( ) / @ # % & + =
+    special_char_count = sum(1 for c in prompt if not c.isalnum() and not c.isspace() and c not in ".,!?'\"-:()/@#%&+=")
+    if special_char_count > len(prompt) * 0.5:  # More than 50% unusual special characters
         logger.warning(f"Excessive special characters in prompt: {special_char_count}/{len(prompt)}")
         raise SanitizationError(
             "Prompt contains too many special characters. "
@@ -77,8 +77,11 @@ def sanitize_prompt(prompt: str, max_length: int = 5000) -> str:
     # Strip leading/trailing whitespace
     sanitized = prompt.strip()
     
-    # Normalize whitespace (replace multiple spaces with single space)
-    sanitized = re.sub(r'\s+', ' ', sanitized)
+    # Normalize excessive whitespace but preserve newlines
+    # Replace multiple spaces/tabs with single space, but keep newlines
+    sanitized = re.sub(r'[ \t]+', ' ', sanitized)
+    # Limit consecutive newlines to 2
+    sanitized = re.sub(r'\n{3,}', '\n\n', sanitized)
     
     logger.debug(f"Prompt sanitized successfully (length: {len(sanitized)})")
     return sanitized
