@@ -81,9 +81,25 @@ class TunnelManager:
             return public_url
             
         except PyngrokError as e:
-            logger.error(f"Pyngrok error creating tunnel: {str(e)}")
+            error_msg = str(e)
+            logger.error(f"Pyngrok error creating tunnel: {error_msg}")
+            
+            # Provide helpful error message for authentication failures
+            if "authentication failed" in error_msg.lower() or "ERR_NGROK_107" in error_msg:
+                suggestion = (
+                    "Your ngrok authtoken is invalid. Please:\n"
+                    "1. Visit https://dashboard.ngrok.com/get-started/your-authtoken\n"
+                    "2. Copy your valid authtoken\n"
+                    "3. Update NGROK_AUTH_TOKEN in your .env file\n"
+                    "4. Restart the server"
+                )
+                raise TunnelCreationError(
+                    f"Failed to create tunnel: {error_msg}",
+                    suggestion=suggestion
+                )
+            
             raise TunnelCreationError(
-                f"Failed to create tunnel: {str(e)}"
+                f"Failed to create tunnel: {error_msg}"
             )
         except Exception as e:
             logger.error(f"Unexpected error creating tunnel: {str(e)}")

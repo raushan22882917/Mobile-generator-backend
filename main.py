@@ -46,6 +46,125 @@ from exceptions import (
 )
 from models.error_response import error_from_exception
 
+# Helper function to enhance screens with icons and images
+async def enhance_screen_with_icons_and_images(
+    project_id: str,
+    file_path: str,
+    content: str,
+    project_dir: str
+):
+    """
+    Automatically enhance a screen file with icons and generate images using Gemini
+    
+    Args:
+        project_id: Project identifier
+        file_path: Path to the screen file
+        content: Current file content
+        project_dir: Project directory path
+    """
+    import os
+    from pathlib import Path
+    from utils.ui_ux_principles import get_icon_for_screen, get_icon_import
+    
+    logger.info(f"Enhancing screen {file_path} with icons and images")
+    
+    # Extract screen name from file path
+    screen_name = Path(file_path).stem
+    
+    # Get appropriate icon for this screen
+    icon_mapping = get_icon_for_screen(screen_name, content[:200])  # Use first 200 chars as description
+    
+    # Check if @expo/vector-icons is already imported
+    if "@expo/vector-icons" not in content and icon_mapping:
+        # Add icon import if not present
+        icon_import = get_icon_import()
+        
+        # Find the best place to add the import (after React imports)
+        lines = content.split('\n')
+        import_end_index = 0
+        for i, line in enumerate(lines):
+            if line.strip().startswith('import ') and 'react' in line.lower():
+                import_end_index = i + 1
+        
+        # Insert icon import
+        lines.insert(import_end_index, icon_import)
+        content = '\n'.join(lines)
+        
+        # Update the file with enhanced content
+        file_manager.write_file(project_id, file_path, content)
+        logger.info(f"Added @expo/vector-icons import to {file_path}")
+    
+    # Generate images using Gemini if available
+    if screen_generator and screen_generator.image_generator:
+        try:
+            # Analyze what images would be useful for this screen
+            image_description = f"Professional mobile app image for {screen_name} screen. Modern, clean design suitable for React Native Expo app."
+            
+            # Generate image
+            assets_dir = Path(project_dir) / "assets" / "images"
+            assets_dir.mkdir(parents=True, exist_ok=True)
+            
+            image_filename = f"{screen_name.lower().replace(' ', '-')}-hero.png"
+            image_path = assets_dir / image_filename
+            
+            generated_path = await screen_generator.image_generator.generate_image(
+                prompt=image_description,
+                output_path=str(image_path),
+                width=800,
+                height=600
+            )
+            
+            if generated_path and os.path.exists(generated_path):
+                logger.info(f"Generated image for {screen_name}: {generated_path}")
+                
+                # Update screen content to use the generated image
+                if f"assets/images/{image_filename}" not in content:
+                    # Add image import and usage
+                    image_import = f"import {{ Image }} from 'react-native';"
+                    if "import { Image }" not in content:
+                        lines = content.split('\n')
+                        for i, line in enumerate(lines):
+                            if line.strip().startswith('import ') and 'react-native' in line:
+                                # Add Image to existing import
+                                if 'Image' not in line:
+                                    lines[i] = line.replace('}', ', Image }')
+                                    break
+                        else:
+                            # Add new import
+                            lines.insert(0, image_import)
+                        content = '\n'.join(lines)
+                    
+                    # Add image usage in the component (in the return statement)
+                    if f"require('@/assets/images/{image_filename}')" not in content:
+                        # Try to add image in a logical place (after View opening tag)
+                        lines = content.split('\n')
+                        for i, line in enumerate(lines):
+                            if '<View' in line and 'style' in line:
+                                # Add image after this View
+                                indent = len(line) - len(line.lstrip())
+                                indent_spaces = ' ' * (indent + 2)
+                                indent_spaces_inner = ' ' * (indent + 4)
+                                indent_spaces_deep = ' ' * (indent + 6)
+                                
+                                image_code = f"{indent_spaces}<Image\n"
+                                image_code += f"{indent_spaces_inner}source={{require('@/assets/images/{image_filename}')}}\n"
+                                image_code += f"{indent_spaces_inner}style={{{{\n"
+                                image_code += f"{indent_spaces_deep}width: '100%',\n"
+                                image_code += f"{indent_spaces_deep}height: 200,\n"
+                                image_code += f"{indent_spaces_deep}resizeMode: 'cover',\n"
+                                image_code += f"{indent_spaces_inner}}}}}\n"
+                                image_code += indent_spaces + "}/>\n"
+                                lines.insert(i + 1, image_code)
+                                content = '\n'.join(lines)
+                                break
+                        
+                        # Update file with image usage
+                        file_manager.write_file(project_id, file_path, content)
+                        logger.info(f"Added generated image to {file_path}")
+        except Exception as e:
+            logger.warning(f"Failed to generate image for {screen_name}: {e}")
+            # Don't fail if image generation fails
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -59,6 +178,8 @@ project_manager: ProjectManager = None
 command_executor: CommandExecutor = None
 tunnel_manager: TunnelManager = None
 resource_monitor: ResourceMonitor = None
+screen_generator = None
+parallel_workflow = None
 
 
 @asynccontextmanager
@@ -69,7 +190,7 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting AI Expo App Builder API...")
     
-    global code_generator, project_manager, command_executor, tunnel_manager, resource_monitor
+    global code_generator, project_manager, command_executor, tunnel_manager, resource_monitor, screen_generator, parallel_workflow
     
     # Initialize services
     code_generator = CodeGenerator(
@@ -98,6 +219,21 @@ async def lifespan(app: FastAPI):
         max_cpu_percent=settings.max_cpu_percent,
         max_memory_percent=settings.max_memory_percent,
         min_disk_percent=settings.min_disk_percent
+    )
+    
+    # Initialize screen generator and parallel workflow
+    from services.screen_generator import ScreenGenerator
+    from services.parallel_workflow import ParallelWorkflow
+    
+    screen_generator = ScreenGenerator(
+        api_key=settings.openai_api_key,
+        model="gpt-5",
+        gemini_api_key=settings.gemini_api_key if hasattr(settings, 'gemini_api_key') else None
+    )
+    
+    parallel_workflow = ParallelWorkflow(
+        screen_generator=screen_generator,
+        tunnel_manager=tunnel_manager
     )
     
     logger.info("All services initialized successfully")
@@ -218,6 +354,11 @@ class GenerateRequest(BaseModel):
     prompt: str = Field(..., min_length=10, max_length=5000, description="Natural language description of the app")
     user_id: Optional[str] = Field(default="anonymous", description="User identifier")
     template_id: Optional[str] = Field(default=None, description="UI template ID to apply")
+
+
+class AnalyzePromptRequest(BaseModel):
+    """Request model for /analyze-prompt endpoint"""
+    prompt: str = Field(..., min_length=10, max_length=5000, description="Natural language description of the app")
 
 
 class GenerateResponse(BaseModel):
@@ -519,6 +660,31 @@ async def get_status(project_id: str):
     )
 
 
+@app.get("/project-status/{project_id}")
+async def get_project_status(project_id: str):
+    """
+    Alias for /status/{project_id} - Get current status of a project
+    Returns simplified status information for terminal display
+    """
+    try:
+        validated_project_id = validate_project_id(project_id)
+    except SanitizationError as e:
+        logger.warning(f"Invalid project ID: {project_id}")
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    
+    project = project_manager.get_project(validated_project_id)
+    
+    if not project:
+        return JSONResponse(status_code=404, content={"error": "Project not found"})
+    
+    return {
+        "status": project.status.value,
+        "port": project.port if hasattr(project, 'port') else None,
+        "url": project.preview_url,
+        "project_id": project.id
+    }
+
+
 @app.get("/download/{project_id}")
 async def download_project(project_id: str, background_tasks: BackgroundTasks):
     """
@@ -754,6 +920,47 @@ async def list_projects():
         )
 
 
+@app.post("/analyze-prompt")
+async def analyze_prompt(request: AnalyzePromptRequest, api_key: str = Depends(verify_api_key)):
+    """
+    Analyze a prompt and return suggested screens and images WITHOUT generating the project
+    
+    This endpoint helps users preview what will be created before committing to generation.
+    Returns:
+    - List of suggested screens with descriptions
+    - List of suggested images with descriptions
+    - Total counts
+    """
+    try:
+        # Sanitize input
+        sanitized_prompt = sanitize_prompt(request.prompt)
+        logger.info(f"Analyzing prompt: {sanitized_prompt[:100]}...")
+        
+        # Use screen generator to analyze
+        if not screen_generator:
+            raise AppBuilderError("Screen generator not initialized")
+        
+        suggestions = await screen_generator.analyze_prompt_suggestions(sanitized_prompt)
+        
+        logger.info(f"Analysis complete: {suggestions['total_screens']} screens, {suggestions['total_images']} images")
+        
+        return {
+            "success": True,
+            "suggestions": suggestions,
+            "message": f"Found {suggestions['total_screens']} screens and {suggestions['total_images']} images"
+        }
+        
+    except SanitizationError as e:
+        logger.warning(f"Input sanitization failed: {str(e)}")
+        raise ValidationError(str(e))
+    except Exception as e:
+        logger.error(f"Failed to analyze prompt: {str(e)}")
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": "Failed to analyze prompt", "details": str(e)}
+        )
+
+
 @app.post("/projects/{project_id}/activate")
 async def activate_project(project_id: str):
     """
@@ -771,21 +978,82 @@ async def activate_project(project_id: str):
     logger.info(f"Activation requested for project {validated_project_id}")
     
     try:
-        # Check if project is already active
+        # Check if project is already active and ready
         existing_project = project_manager.get_project(validated_project_id)
         
         if existing_project and existing_project.id in project_manager.active_projects:
-            # Already active - just return current status
-            logger.info(f"Project {validated_project_id} is already active")
-            return {
-                "project_id": existing_project.id,
-                "status": existing_project.status.value,
-                "preview_url": existing_project.preview_url,
-                "message": "Project is already active"
-            }
+            # If project is in error state, allow reactivation by removing it first
+            if existing_project.status == models.project.ProjectStatus.ERROR:
+                logger.info(f"Project {validated_project_id} is in error state, removing from active projects for reactivation")
+                # Release the port and remove from active projects
+                project_manager.port_manager.release_port(existing_project.port)
+                del project_manager.active_projects[validated_project_id]
+            elif existing_project.status == models.project.ProjectStatus.READY:
+                # Already active and ready - just return current status
+                logger.info(f"Project {validated_project_id} is already active and ready")
+                return {
+                    "project_id": existing_project.id,
+                    "status": existing_project.status.value,
+                    "preview_url": existing_project.preview_url,
+                    "message": "Project is already active"
+                }
+            else:
+                # Project is in progress (starting, generating, etc.)
+                logger.info(f"Project {validated_project_id} is already being processed")
+                return {
+                    "project_id": existing_project.id,
+                    "status": existing_project.status.value,
+                    "preview_url": existing_project.preview_url,
+                    "message": "Project is currently being processed"
+                }
         
         # Reactivate the project
         project = project_manager.reactivate_project(validated_project_id)
+        
+        # Update status to installing dependencies
+        project_manager.update_project_status(
+            project.id,
+            models.project.ProjectStatus.INSTALLING_DEPS
+        )
+        
+        # Ensure dependencies are installed before starting server
+        logger.info(f"Setting up Expo project for {project.id} in {project.directory}")
+        try:
+            await asyncio.wait_for(
+                command_executor.setup_expo_project(
+                    project_dir=project.directory,
+                    port=project.port,
+                    timeout=600  # 10 minutes for npm install
+                ),
+                timeout=600  # 10 minutes timeout
+            )
+            logger.info(f"Dependencies installed successfully for project {project.id}")
+        except asyncio.TimeoutError:
+            logger.error(f"Dependency installation timed out for project {project.id}")
+            project_manager.update_project_status(
+                project.id,
+                models.project.ProjectStatus.ERROR,
+                error_message="Dependency installation timed out after 10 minutes"
+            )
+            raise DependencyInstallError("Dependency installation timed out")
+        except CommandExecutionError as e:
+            error_msg = f"Failed to install dependencies: {str(e)}"
+            logger.error(error_msg)
+            project_manager.update_project_status(
+                project.id,
+                models.project.ProjectStatus.ERROR,
+                error_message=error_msg
+            )
+            raise DependencyInstallError(error_msg)
+        except Exception as e:
+            error_msg = f"Unexpected error installing dependencies: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            project_manager.update_project_status(
+                project.id,
+                models.project.ProjectStatus.ERROR,
+                error_message=str(e)
+            )
+            raise
         
         # Update status to starting server
         project_manager.update_project_status(
@@ -812,8 +1080,18 @@ async def activate_project(project_id: str):
                 error_message="Server start timed out after 90 seconds"
             )
             raise ServerStartError("Expo server failed to start within 90 seconds")
+        except CommandExecutionError as e:
+            error_msg = f"Failed to start Expo server: {str(e)}"
+            logger.error(error_msg)
+            project_manager.update_project_status(
+                project.id,
+                models.project.ProjectStatus.ERROR,
+                error_message=error_msg
+            )
+            raise ServerStartError(error_msg)
         except Exception as e:
-            logger.error(f"Failed to start Expo server: {e}")
+            error_msg = f"Unexpected error starting Expo server: {str(e)}"
+            logger.error(error_msg, exc_info=True)
             project_manager.update_project_status(
                 project.id,
                 models.project.ProjectStatus.ERROR,
@@ -872,11 +1150,84 @@ async def activate_project(project_id: str):
         }
         
     except ValueError as e:
-        logger.error(f"Failed to activate project {validated_project_id}: {str(e)}")
+        error_msg = f"Failed to activate project {validated_project_id}: {str(e)}"
+        logger.error(error_msg, exc_info=True)
         raise ProjectNotFoundError(validated_project_id)
-    except Exception as e:
-        logger.error(f"Error activating project {validated_project_id}: {str(e)}")
+    except (ProjectNotFoundError, DependencyInstallError, ServerStartError, TunnelCreationError) as e:
+        # Re-raise known exceptions as-is (they're already properly handled)
         raise
+    except Exception as e:
+        error_msg = f"Unexpected error activating project {validated_project_id}: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        # Clean up project if it was added to active projects
+        try:
+            if validated_project_id in project_manager.active_projects:
+                project = project_manager.active_projects[validated_project_id]
+                if hasattr(project, 'port'):
+                    project_manager.port_manager.release_port(project.port)
+                del project_manager.active_projects[validated_project_id]
+                logger.info(f"Cleaned up project {validated_project_id} after error")
+        except Exception as cleanup_error:
+            logger.error(f"Failed to cleanup project {validated_project_id}: {cleanup_error}")
+        raise ServerStartError(error_msg)
+
+
+class ManualActivateRequest(BaseModel):
+    """Request model for manual activation"""
+    preview_url: str = Field(..., description="Manually provided preview URL (ngrok or other)")
+
+
+@app.post("/projects/{project_id}/manual-activate")
+async def manual_activate_project(project_id: str, request: ManualActivateRequest):
+    """
+    Manually activate a project by providing the preview URL directly
+    
+    This is useful when automated activation fails. You can:
+    1. Manually start the Expo server (npx expo start --port XXXX)
+    2. Manually create ngrok tunnel (ngrok http XXXX)
+    3. Call this endpoint with the ngrok URL
+    """
+    # Validate project ID
+    try:
+        validated_project_id = validate_project_id(project_id)
+    except SanitizationError as e:
+        logger.warning(f"Invalid project ID: {project_id}")
+        raise ValidationError(str(e))
+    
+    logger.info(f"Manual activation requested for project {validated_project_id}")
+    logger.info(f"Preview URL: {request.preview_url}")
+    
+    # Get or load project
+    project = project_manager.get_project(validated_project_id)
+    
+    if not project:
+        raise ProjectNotFoundError(validated_project_id)
+    
+    # If not in active projects, add it
+    if validated_project_id not in project_manager.active_projects:
+        # Allocate a port (even though we're not using it for automated start)
+        port = project_manager.port_manager.allocate_port()
+        project.port = port
+        project_manager.active_projects[validated_project_id] = project
+        logger.info(f"Added project {validated_project_id} to active projects")
+    
+    # Update preview URL
+    project_manager.update_preview_url(validated_project_id, request.preview_url)
+    
+    # Mark as ready
+    project_manager.update_project_status(
+        validated_project_id,
+        models.project.ProjectStatus.READY
+    )
+    
+    logger.info(f"Project {validated_project_id} manually activated successfully")
+    
+    return {
+        "project_id": validated_project_id,
+        "status": "ready",
+        "preview_url": request.preview_url,
+        "message": "Project manually activated successfully"
+    }
 
 
 @app.get("/templates")
@@ -886,31 +1237,37 @@ async def get_templates():
     
     Returns a list of all available color schemes and UI templates
     """
-    from templates.ui_templates import get_all_templates
-    
-    templates = get_all_templates()
-    
-    return {
-        "templates": [
-            {
-                "id": t.id,
-                "name": t.name,
-                "description": t.description,
-                "colors": {
-                    "primary": t.colors.primary,
-                    "secondary": t.colors.secondary,
-                    "accent": t.colors.accent,
-                    "background": t.colors.background,
-                    "surface": t.colors.surface,
-                    "text_primary": t.colors.text_primary,
-                    "text_secondary": t.colors.text_secondary,
-                },
-                "preview_image": t.preview_image,
-                "preview_url": f"/template-preview/{t.id}"
-            }
-            for t in templates
-        ]
-    }
+    try:
+        from templates.ui_templates import get_all_templates
+        
+        templates = get_all_templates()
+        
+        return {
+            "templates": [
+                {
+                    "id": t.id,
+                    "name": t.name,
+                    "description": t.description,
+                    "colors": {
+                        "primary": t.colors.primary,
+                        "secondary": t.colors.secondary,
+                        "accent": t.colors.accent,
+                        "background": t.colors.background,
+                        "surface": t.colors.surface,
+                        "text_primary": t.colors.text_primary,
+                        "text_secondary": t.colors.text_secondary,
+                        "border": t.colors.border if hasattr(t.colors, 'border') else t.colors.surface,
+                    },
+                    "preview_image": t.preview_image if hasattr(t, 'preview_image') else None,
+                    "preview_url": f"/template-preview/{t.id}"
+                }
+                for t in templates
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Error loading templates: {e}", exc_info=True)
+        # Return empty list instead of error to prevent frontend crash
+        return {"templates": []}
 
 
 @app.get("/template-preview/{template_id}")
@@ -1564,29 +1921,104 @@ async def get_file_content(project_id: str, file_path: str):
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
-@app.put("/files/{project_id}/{file_path:path}")
-async def update_file(project_id: str, file_path: str, request: FileContentRequest):
-    """Update file"""
+@app.get("/files/{project_id}/{file_path:path}")
+async def serve_file(project_id: str, file_path: str):
+    """Serve raw file (for images, etc.)"""
     try:
         validated_project_id = validate_project_id(project_id)
+        project = project_manager.get_project(validated_project_id)
+        if not project:
+            return JSONResponse(status_code=404, content={"error": "Project not found"})
+        
+        full_path = os.path.join(project.directory, file_path)
+        
+        if not os.path.exists(full_path):
+            return JSONResponse(status_code=404, content={"error": "File not found"})
+        
+        # Determine media type based on extension
+        ext = file_path.split('.')[-1].lower()
+        media_types = {
+            'png': 'image/png',
+            'jpg': 'image/jpeg',
+            'jpeg': 'image/jpeg',
+            'gif': 'image/gif',
+            'svg': 'image/svg+xml',
+            'webp': 'image/webp',
+            'bmp': 'image/bmp',
+            'ico': 'image/x-icon',
+        }
+        
+        media_type = media_types.get(ext, 'application/octet-stream')
+        
+        # Return file as response
+        return FileResponse(full_path, media_type=media_type)
+        
+    except Exception as e:
+        logger.error(f"Error serving file: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.put("/files/{project_id}/{file_path:path}")
+async def update_file(project_id: str, file_path: str, request: FileContentRequest):
+    """Update file - automatically generates icons and images if it's a screen file"""
+    try:
+        validated_project_id = validate_project_id(project_id)
+        project = project_manager.get_project(validated_project_id)
+        
+        if not project:
+            return JSONResponse(status_code=404, content={"error": "Project not found"})
+        
         success = file_manager.write_file(validated_project_id, file_path, request.content)
         if not success:
             return JSONResponse(status_code=500, content={"error": "Failed to write"})
+        
+        # If this is a screen file (.tsx), enhance it with icons and generate images
+        if file_path.endswith('.tsx') and 'app' in file_path:
+            try:
+                await enhance_screen_with_icons_and_images(
+                    project_id=validated_project_id,
+                    file_path=file_path,
+                    content=request.content,
+                    project_dir=project.directory
+                )
+            except Exception as e:
+                logger.warning(f"Failed to enhance screen with icons/images: {e}")
+                # Don't fail the update if enhancement fails
+        
         return {"success": True, "path": file_path}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 @app.post("/files/{project_id}")
 async def create_file(project_id: str, request: FileCreateRequest):
-    """Create file/folder"""
+    """Create file/folder - automatically generates icons and images if it's a screen file"""
     try:
         validated_project_id = validate_project_id(project_id)
+        project = project_manager.get_project(validated_project_id)
+        
+        if not project:
+            return JSONResponse(status_code=404, content={"error": "Project not found"})
+        
         if request.type == 'folder':
             success = file_manager.create_folder(validated_project_id, request.path)
         else:
             success = file_manager.create_file(validated_project_id, request.path, request.content)
+        
         if not success:
             return JSONResponse(status_code=500, content={"error": "Failed to create"})
+        
+        # If this is a screen file (.tsx), enhance it with icons and generate images
+        if request.type != 'folder' and request.path.endswith('.tsx') and 'app' in request.path:
+            try:
+                await enhance_screen_with_icons_and_images(
+                    project_id=validated_project_id,
+                    file_path=request.path,
+                    content=request.content,
+                    project_dir=project.directory
+                )
+            except Exception as e:
+                logger.warning(f"Failed to enhance screen with icons/images: {e}")
+                # Don't fail the creation if enhancement fails
+        
         return {"success": True, "path": request.path}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})

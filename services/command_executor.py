@@ -28,12 +28,12 @@ class CommandResult:
 class CommandExecutor:
     """Service for executing shell commands with timeout and monitoring"""
     
-    def __init__(self, default_timeout: int = 300):
+    def __init__(self, default_timeout: int = 600):
         """
         Initialize CommandExecutor
         
         Args:
-            default_timeout: Default timeout in seconds (default: 300 = 5 minutes)
+            default_timeout: Default timeout in seconds (default: 600 = 10 minutes)
         """
         self.default_timeout = default_timeout
         logger.info(f"CommandExecutor initialized with default timeout: {default_timeout}s")
@@ -184,13 +184,11 @@ class CommandExecutor:
         logger.info(f"Creating Expo project '{app_name}' in {parent_dir}")
         
         # Create Expo project using npx create-expo-app and cd into it
+        # Increased timeout to 600 seconds (10 minutes) for slower connections
         create_result = await self.run_command(
-            command=(
-                f"npm create expo-app@latest {app_name} "
-                f"-- --template blank --yes"
-            ),
+            command=f"npx create-expo-app@latest {app_name} && cd {app_name}",
             cwd=parent_dir,
-            timeout=timeout or 180  # 3 minutes for project creation
+            timeout=timeout or 600  # 10 minutes for project creation
         )
         
         if not create_result.success:
@@ -245,7 +243,7 @@ class CommandExecutor:
         install_result = await self.run_command(
             command="npm install",
             cwd=project_dir,
-            timeout=timeout or 300  # 5 minutes for npm install
+            timeout=timeout or 600  # 10 minutes for npm install
         )
         
         if not install_result.success:
@@ -259,7 +257,7 @@ class CommandExecutor:
         # Step 2: Verify expo CLI is available
         logger.info("Verifying Expo CLI...")
         expo_check = await self.run_command(
-            command="npm exec expo -- --version",
+            command="npx expo --version",
             cwd=project_dir,
             timeout=30
         )
@@ -297,6 +295,67 @@ class CommandExecutor:
             logger.debug(f"Port check failed: {e}")
             return False
     
+    async def _is_port_available(self, port: int) -> bool:
+        """
+        Check if a port is available (not in use)
+        
+        Args:
+            port: Port number to check
+            
+        Returns:
+            True if port is available, False otherwise
+        """
+        import socket
+        
+        sock = None
+        try:
+            # Try to bind to the port - if successful, port is available
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.settimeout(1)
+            try:
+                sock.bind(('127.0.0.1', port))
+                # Port is available
+                return True
+            except OSError as e:
+                # Port is in use (errno 10048 on Windows, 98 on Linux)
+                logger.debug(f"Port {port} is not available: {e}")
+                return False
+        except Exception as e:
+            logger.debug(f"Port availability check failed: {e}")
+            return False
+        finally:
+            # Make sure socket is closed
+            if sock:
+                try:
+                    sock.close()
+                except:
+                    pass
+    
+    async def _find_available_port(self, start_port: int, max_attempts: int = 10) -> int:
+        """
+        Find an available port starting from start_port
+        
+        Args:
+            start_port: Starting port number
+            max_attempts: Maximum number of ports to try
+            
+        Returns:
+            Available port number
+            
+        Raises:
+            CommandExecutionError: If no available port found
+        """
+        for offset in range(max_attempts):
+            port = start_port + offset
+            if await self._is_port_available(port):
+                logger.info(f"Found available port: {port}")
+                return port
+        
+        raise CommandExecutionError(
+            f"Could not find available port starting from {start_port} after {max_attempts} attempts"
+        )
+    
     async def start_expo_server(
         self,
         project_dir: str,
@@ -325,38 +384,133 @@ class CommandExecutor:
             raise CommandExecutionError(f"Project directory does not exist: {project_dir}")
         
         try:
+            # Check if the requested port is available
+            if not await self._is_port_available(port):
+                logger.warning(f"Port {port} is not available, finding alternative port...")
+                # Find an available port near the requested one
+                port = await self._find_available_port(port, max_attempts=10)
+                logger.info(f"Using alternative port: {port}")
+            
             # Start Expo server using npx expo start with explicit port
             # This avoids port conflicts and interactive prompts
             import sys
             import os
             
-            # Set environment variables to avoid interactive prompts and enable hot reload
+            # Set environment variables to enable hot reload
+            # Note: We don't set CI=1 because it makes Expo think it's in non-interactive mode
+            # but Expo still needs to ask for input in some cases, causing errors.
+            # Instead, we check port availability beforehand and pipe "yes" to handle any prompts.
             env = os.environ.copy()
-            env['CI'] = '1'  # Disable interactive prompts
+            # Remove CI if it's set, to allow Expo to handle prompts properly
+            if 'CI' in env:
+                del env['CI']
             env['EXPO_NO_TELEMETRY'] = '1'  # Disable telemetry
             env['EXPO_DEVTOOLS_LISTEN_ADDRESS'] = '0.0.0.0'  # Allow external connections
             env['REACT_NATIVE_PACKAGER_HOSTNAME'] = '0.0.0.0'  # Metro bundler hostname
+            env['EXPO_NO_DOTENV'] = '1'  # Disable .env file loading to avoid conflicts
+            env['EXPO_NO_GIT_STATUS'] = '1'  # Disable git status check
             
             if sys.platform == 'win32':
+                # Windows: Ensure ProactorEventLoop is set for subprocess support
+                import asyncio
+                loop = asyncio.get_event_loop()
+                if not isinstance(loop, asyncio.ProactorEventLoop):
+                    logger.warning("Current event loop is not ProactorEventLoop, setting policy...")
+                    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+                    # Note: This won't affect the current loop, but will affect new ones
+                
                 # Windows: use shell to find npx in PATH
                 # Enable web, disable tunnel (we use ngrok), enable LAN access
-                cmd = (
-                    f"npm exec expo -- start --port {port} --web --lan"
-                )
-                process = await asyncio.create_subprocess_shell(
-                    cmd,
-                    cwd=project_dir,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    env=env
-                )
+                # Since port is already checked and available, Expo shouldn't ask for confirmation
+                # But we'll use stdin to handle any prompts that might occur
+                cmd = f'npx --yes expo start --port {port} --web --lan'
+                logger.info(f"Starting Expo with command: {cmd}")
+                logger.info(f"Working directory: {project_dir}")
+                
+                try:
+                    # Use subprocess.Popen wrapped in executor for Windows compatibility
+                    import subprocess
+                    from concurrent.futures import ThreadPoolExecutor
+                    import threading
+                    
+                    def create_process():
+                        """Create subprocess using Popen (Windows compatible)"""
+                        # Create process with stdin=PIPE so we can send input if needed
+                        process = subprocess.Popen(
+                            cmd,
+                            cwd=project_dir,
+                            shell=True,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            stdin=subprocess.PIPE,
+                            env=env,
+                            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == 'win32' else 0,
+                            text=True,  # Use text mode for stdin
+                            bufsize=1  # Line buffered
+                        )
+                        
+                        # Start a background thread to send "yes" if Expo asks for input
+                        def send_yes():
+                            """Send 'yes' to stdin after a short delay"""
+                            import time
+                            time.sleep(0.5)  # Wait a bit for Expo to start
+                            try:
+                                # Send "yes" multiple times to handle any prompts
+                                for _ in range(3):
+                                    if process.stdin and not process.stdin.closed:
+                                        process.stdin.write("yes\n")
+                                        process.stdin.flush()
+                                        time.sleep(0.1)
+                            except:
+                                pass  # Ignore if stdin is closed
+                        
+                        # Start thread to handle prompts
+                        prompt_thread = threading.Thread(target=send_yes, daemon=True)
+                        prompt_thread.start()
+                        
+                        return process
+                    
+                    # Create process in thread pool to avoid blocking
+                    with ThreadPoolExecutor() as executor:
+                        popen_process = await loop.run_in_executor(executor, create_process)
+                    
+                    # Wrap Popen process to make it compatible with asyncio.subprocess.Process
+                    class ProcessWrapper:
+                        def __init__(self, popen_proc):
+                            self.popen_proc = popen_proc
+                            self.pid = popen_proc.pid
+                            self.returncode = popen_proc.returncode
+                            # Expose stdout and stderr for reading
+                            self.stdout = popen_proc.stdout
+                            self.stderr = popen_proc.stderr
+                            
+                        async def communicate(self):
+                            """Read stdout and stderr"""
+                            loop = asyncio.get_event_loop()
+                            stdout, stderr = await loop.run_in_executor(None, self.popen_proc.communicate)
+                            return stdout, stderr
+                        
+                        def kill(self):
+                            """Kill the process"""
+                            try:
+                                self.popen_proc.kill()
+                            except:
+                                pass
+                    
+                    process = ProcessWrapper(popen_process)
+                    logger.info(f"Process created successfully with PID {process.pid}")
+                    
+                except Exception as e:
+                    logger.error(f"Failed to create subprocess: {type(e).__name__}: {str(e)}")
+                    raise CommandExecutionError(
+                        f"Failed to create Expo process: {type(e).__name__}: {str(e) or 'Process creation failed'}"
+                    )
             else:
-                # Unix: use exec
+                # Unix: use exec with stdin=PIPE to handle prompts
                 process = await asyncio.create_subprocess_exec(
-                    "npm",
-                    "exec",
+                    "npx",
+                    "--yes",
                     "expo",
-                    "--",
                     "start",
                     "--port",
                     str(port),
@@ -365,10 +519,48 @@ class CommandExecutor:
                     cwd=project_dir,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
+                    stdin=asyncio.subprocess.PIPE,
                     env=env
                 )
+                
+                # Send "yes" in background to handle any prompts
+                async def send_yes_async():
+                    """Send 'yes' to stdin after a short delay"""
+                    await asyncio.sleep(0.5)
+                    try:
+                        for _ in range(3):
+                            if process.stdin and not process.stdin.closed:
+                                process.stdin.write(b"yes\n")
+                                await process.stdin.drain()
+                                await asyncio.sleep(0.1)
+                    except:
+                        pass  # Ignore if stdin is closed
+                
+                # Start background task to handle prompts
+                asyncio.create_task(send_yes_async())
             
             logger.info(f"Expo server process started with PID {process.pid}")
+            
+            # Give process a moment to start
+            await asyncio.sleep(1)
+            
+            # Check if process crashed immediately
+            # Update returncode for wrapper
+            if hasattr(process, 'popen_proc'):
+                process.returncode = process.popen_proc.poll()
+            
+            if process.returncode is not None:
+                stdout, stderr = await process.communicate()
+                # Handle both bytes and strings (Windows uses text=True, Unix uses bytes)
+                stdout_text = stdout if isinstance(stdout, str) else (stdout.decode('utf-8', errors='ignore') if stdout else "")
+                stderr_text = stderr if isinstance(stderr, str) else (stderr.decode('utf-8', errors='ignore') if stderr else "")
+                logger.error(f"Expo server crashed immediately. Exit code: {process.returncode}")
+                logger.error(f"stdout: {stdout_text[:500] if stdout_text else 'None'}")
+                logger.error(f"stderr: {stderr_text[:500] if stderr_text else 'None'}")
+                raise CommandExecutionError(
+                    f"Expo server crashed immediately (exit code {process.returncode}). "
+                    f"Error: {stderr_text[:200] if stderr_text else stdout_text[:200] if stdout_text else 'No error output'}"
+                )
             
             # Wait for server to be ready (check if port is listening)
             logger.info(f"Waiting for Expo server to be ready on port {port}...")
@@ -379,12 +571,19 @@ class CommandExecutor:
                 await asyncio.sleep(wait_interval)
                 
                 # Check if process is still running
+                # Update returncode for wrapper
+                if hasattr(process, 'popen_proc'):
+                    process.returncode = process.popen_proc.poll()
+                
                 if process.returncode is not None:
-                    # Process already terminated
+                    # Process terminated during startup
                     stdout, stderr = await process.communicate()
-                    logger.error(f"Expo server failed to start: {stderr.decode()}")
+                    # Handle both bytes and strings (Windows uses text=True, Unix uses bytes)
+                    stdout_text = stdout if isinstance(stdout, str) else (stdout.decode('utf-8', errors='ignore') if stdout else "")
+                    stderr_text = stderr if isinstance(stderr, str) else (stderr.decode('utf-8', errors='ignore') if stderr else "")
+                    logger.error(f"Expo server terminated during startup: {stderr_text}")
                     raise CommandExecutionError(
-                        f"Expo server terminated: {stderr.decode()[:200]}"
+                        f"Expo server terminated: {stderr_text[:200] if stderr_text else stdout_text[:200] if stdout_text else 'No error output'}"
                     )
                 
                 # Check if port is listening
@@ -394,14 +593,67 @@ class CommandExecutor:
             
             # Timeout - server didn't start in time
             logger.error(f"Expo server did not start within {max_wait} seconds")
-            process.kill()
+            # Try to get error output before killing (but don't fail if we can't read it)
+            error_output = ""
+            try:
+                # For Windows ProcessWrapper, try to read synchronously from the underlying process
+                if hasattr(process, 'popen_proc'):
+                    # Windows: read from Popen process directly if available
+                    try:
+                        if process.popen_proc.stderr and not process.popen_proc.stderr.closed:
+                            # Peek at stderr if available (non-blocking)
+                            import select
+                            import sys
+                            if sys.platform == 'win32':
+                                # On Windows, we can't easily peek without blocking
+                                # Just log that we timed out
+                                pass
+                            else:
+                                # Unix: try to read
+                                if select.select([process.popen_proc.stderr], [], [], 0.1)[0]:
+                                    stderr_data = process.popen_proc.stderr.read(1024)
+                                    if stderr_data:
+                                        if isinstance(stderr_data, str):
+                                            error_output = stderr_data
+                                        else:
+                                            error_output = stderr_data.decode('utf-8', errors='ignore')
+                    except Exception as e:
+                        logger.debug(f"Could not read stderr: {e}")
+                elif hasattr(process, 'stderr') and process.stderr:
+                    # Unix: try async read
+                    try:
+                        stderr_data = await asyncio.wait_for(process.stderr.read(1024), timeout=0.5)
+                        if stderr_data:
+                            if isinstance(stderr_data, str):
+                                error_output = stderr_data
+                            else:
+                                error_output = stderr_data.decode('utf-8', errors='ignore') if stderr_data else ""
+                    except:
+                        pass
+                
+                if error_output:
+                    logger.error(f"Expo server error output: {error_output[:500]}")
+            except Exception as e:
+                logger.debug(f"Error reading process output: {e}")
+            
+            # Kill the process
+            try:
+                process.kill()
+            except:
+                pass
+            
             raise CommandExecutionError(
-                f"Expo server failed to start within {max_wait} seconds"
+                f"Expo server failed to start within {max_wait} seconds. "
+                f"{'Error: ' + error_output[:200] if error_output else 'Check if port is available and node_modules are installed correctly.'}"
             )
             
+        except CommandExecutionError:
+            # Re-raise our custom errors
+            raise
         except Exception as e:
-            logger.error(f"Failed to start Expo server: {str(e)}")
-            raise CommandExecutionError(f"Failed to start Expo server: {str(e)}")
+            logger.error(f"Failed to start Expo server: {str(e)}", exc_info=True)
+            error_msg = str(e) if str(e) else "Unknown error starting Expo server"
+            raise CommandExecutionError(f"Failed to start Expo server: {error_msg}")
     
     async def run_command_with_streaming(
         self,

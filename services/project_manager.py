@@ -154,9 +154,15 @@ class ProjectManager:
                 logger.debug(f"Wrote file: {file_path}")
             
             # Update package.json to add any additional dependencies
+            # IMPORTANT: Ensure essential dependencies (expo, expo-status-bar, @expo/vector-icons) are always present
             package_json_path = project_dir / "package.json"
-            if package_json_path.exists() and code.dependencies:
-                self._update_package_json_dependencies(package_json_path, code.dependencies)
+            if package_json_path.exists():
+                # Always ensure essential dependencies are in package.json
+                self._ensure_essential_dependencies(package_json_path)
+                
+                # Add additional dependencies from generated code
+                if code.dependencies:
+                    self._update_package_json_dependencies(package_json_path, code.dependencies)
             
             # Copy metro.config.js for hot reloading support
             self._copy_metro_config(project_dir)
@@ -188,6 +194,56 @@ class ProjectManager:
                 logger.warning(f"Metro config template not found at {template_path}")
         except Exception as e:
             logger.warning(f"Failed to copy metro config: {e}")
+    
+    def _ensure_essential_dependencies(self, package_json_path: Path) -> None:
+        """
+        Ensure essential dependencies are in package.json.
+        Essential dependencies: expo, expo-status-bar, @expo/vector-icons
+        
+        Args:
+            package_json_path: Path to package.json file
+        """
+        import json
+        
+        try:
+            # Read existing package.json
+            package_json = json.loads(package_json_path.read_text(encoding='utf-8'))
+            
+            # Ensure dependencies section exists
+            if "dependencies" not in package_json:
+                package_json["dependencies"] = {}
+            
+            # Essential dependencies that should always be present
+            essential_deps = {
+                "expo": "latest",
+                "expo-status-bar": "latest",
+                "@expo/vector-icons": "^15.0.0"  # Always include vector icons for professional UI
+            }
+            
+            updated = False
+            for dep_name, dep_version in essential_deps.items():
+                if dep_name not in package_json["dependencies"]:
+                    logger.info(f"Adding essential dependency: {dep_name}@{dep_version}")
+                    package_json["dependencies"][dep_name] = dep_version
+                    updated = True
+                else:
+                    # Verify version is valid
+                    current_version = package_json["dependencies"].get(dep_name, "")
+                    if current_version == "*" or current_version == "":
+                        logger.warning(f"{dep_name} version is invalid ({current_version}), updating to {dep_version}")
+                        package_json["dependencies"][dep_name] = dep_version
+                        updated = True
+            
+            if updated:
+                # Write updated package.json
+                package_json_path.write_text(json.dumps(package_json, indent=2), encoding='utf-8')
+                logger.info("Updated package.json with essential dependencies (expo, expo-status-bar, @expo/vector-icons)")
+            else:
+                logger.debug("All essential dependencies already present in package.json")
+                
+        except Exception as e:
+            logger.error(f"Failed to ensure essential dependencies in package.json: {e}")
+            # Don't fail the whole process if this fails
     
     def _update_package_json_dependencies(self, package_json_path: Path, dependencies: list) -> None:
         """
