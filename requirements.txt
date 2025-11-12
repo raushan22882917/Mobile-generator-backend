@@ -19,6 +19,7 @@ aiofiles==23.2.1
 
 # Google Cloud (optional)
 google-cloud-storage==2.14.0
+google-cloud-logging==3.8.0
 
 # Testing
 pytest==7.4.4

@@ -180,6 +180,7 @@ tunnel_manager: TunnelManager = None
 resource_monitor: ResourceMonitor = None
 screen_generator = None
 parallel_workflow = None
+cloud_logging_service = None
 
 
 @asynccontextmanager
@@ -190,7 +191,7 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting AI Expo App Builder API...")
     
-    global code_generator, project_manager, command_executor, tunnel_manager, resource_monitor, screen_generator, parallel_workflow
+    global code_generator, project_manager, command_executor, tunnel_manager, resource_monitor, screen_generator, parallel_workflow, cloud_logging_service
     
     # Initialize services
     code_generator = CodeGenerator(
@@ -234,6 +235,13 @@ async def lifespan(app: FastAPI):
     parallel_workflow = ParallelWorkflow(
         screen_generator=screen_generator,
         tunnel_manager=tunnel_manager
+    )
+    
+    # Initialize Cloud Logging service
+    from services.cloud_logging import CloudLoggingService
+    cloud_logging_service = CloudLoggingService(
+        project_id=settings.google_cloud_project if settings.google_cloud_project else None,
+        enabled=bool(settings.google_cloud_project)
     )
     
     logger.info("All services initialized successfully")
@@ -351,7 +359,7 @@ async def root():
 
 # Request/Response Models
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 
 
@@ -402,6 +410,24 @@ class MetricsResponse(BaseModel):
     active_projects: int
     total_projects_created: int
     average_generation_time: float
+
+
+class LogEntryResponse(BaseModel):
+    """Response model for a single log entry"""
+    timestamp: str
+    severity: str
+    message: str
+    resource_type: str
+    labels: dict
+
+
+class ProjectLogsResponse(BaseModel):
+    """Response model for /logs/{project_id} endpoint"""
+    project_id: str
+    total_logs: int
+    logs: List[LogEntryResponse]
+    time_range_hours: int
+    cloud_logging_enabled: bool
 
 
 # API Endpoints
@@ -748,6 +774,105 @@ async def get_project_status(project_id: str):
         "url": project.preview_url,
         "project_id": project.id
     }
+
+
+@app.get("/logs/{project_id}", response_model=ProjectLogsResponse)
+async def get_project_logs(
+    project_id: str,
+    hours: int = 24,
+    limit: int = 1000,
+    severity: Optional[str] = None,
+    api_key: str = Depends(verify_api_key)
+):
+    """
+    Get Google Cloud logs for a specific project
+    
+    Fetches logs from Google Cloud Logging API including:
+    - Cloud Run service logs
+    - Cloud Build logs
+    - Any logs related to the project
+    
+    Args:
+        project_id: Project identifier
+        hours: Number of hours to look back (default: 24, max: 168)
+        limit: Maximum number of log entries to return (default: 1000, max: 10000)
+        severity: Filter by severity (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        
+    Returns:
+        ProjectLogsResponse with log entries from Google Cloud
+    """
+    # Validate project ID
+    try:
+        validated_project_id = validate_project_id(project_id)
+    except SanitizationError as e:
+        logger.warning(f"Invalid project ID: {project_id}")
+        raise ValidationError(str(e))
+    
+    # Validate parameters
+    hours = max(1, min(hours, 168))  # Limit to 1-168 hours (1 week)
+    limit = max(1, min(limit, 10000))  # Limit to 1-10000 entries
+    
+    logger.info(
+        f"Logs requested for project {validated_project_id} "
+        f"(hours: {hours}, limit: {limit}, severity: {severity})"
+    )
+    
+    # Check if project exists
+    project = project_manager.get_project(validated_project_id)
+    if not project:
+        logger.warning(f"Logs requested for non-existent project: {project_id}")
+        raise ProjectNotFoundError(project_id)
+    
+    # Check if Cloud Logging is enabled
+    if not cloud_logging_service or not cloud_logging_service.enabled:
+        logger.warning("Cloud Logging not enabled or not configured")
+        return ProjectLogsResponse(
+            project_id=validated_project_id,
+            total_logs=0,
+            logs=[],
+            time_range_hours=hours,
+            cloud_logging_enabled=False
+        )
+    
+    try:
+        # Fetch logs from Google Cloud
+        log_entries = cloud_logging_service.get_project_logs(
+            project_id=validated_project_id,
+            hours=hours,
+            limit=limit,
+            severity=severity
+        )
+        
+        # Convert to response format
+        log_responses = [
+            LogEntryResponse(
+                timestamp=entry.timestamp,
+                severity=entry.severity,
+                message=entry.message,
+                resource_type=entry.resource_type,
+                labels=entry.labels
+            )
+            for entry in log_entries
+        ]
+        
+        logger.info(
+            f"Retrieved {len(log_responses)} log entries for project {validated_project_id}"
+        )
+        
+        return ProjectLogsResponse(
+            project_id=validated_project_id,
+            total_logs=len(log_responses),
+            logs=log_responses,
+            time_range_hours=hours,
+            cloud_logging_enabled=True
+        )
+        
+    except Exception as e:
+        logger.error(f"Error fetching logs for project {validated_project_id}: {str(e)}", exc_info=True)
+        raise AIGenerationError(
+            f"Failed to fetch logs: {str(e)}",
+            "Please check Google Cloud Logging configuration"
+        )
 
 
 @app.get("/download/{project_id}")
