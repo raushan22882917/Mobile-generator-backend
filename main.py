@@ -410,13 +410,13 @@ async def generate(request: GenerateRequest, api_key: str = Depends(verify_api_k
     """
     Generate a new Expo application from natural language prompt
     
-    This endpoint orchestrates the full generation pipeline:
+    Optimized parallel workflow:
     1. Check system capacity
-    2. Generate code using AI
-    3. Create project and write files
-    4. Install dependencies
-    5. Start Expo server
-    6. Create public tunnel
+    2. Create Expo project immediately with basic code
+    3. In parallel:
+       - Setup preview (install deps + start server + create tunnel)
+       - Analyze prompt for required screens
+    4. After preview is ready, generate and add all screens
     
     Returns project ID and preview URL on success.
     """
@@ -447,14 +447,12 @@ async def generate(request: GenerateRequest, api_key: str = Depends(verify_api_k
         raise ResourceLimitError(reason)
     
     try:
-        
-        # Step 2: Generate unique app name
         import os
         from pathlib import Path
         import random
         import string
         
-        # Step 3: Create project placeholder (for tracking)
+        # Step 2: Create project placeholder (for tracking)
         project = project_manager.create_project(
             user_id=sanitized_user_id,
             prompt=sanitized_prompt
@@ -462,13 +460,13 @@ async def generate(request: GenerateRequest, api_key: str = Depends(verify_api_k
         
         logger.info(f"Created project {project.id}")
         
-        # Step 4: Create new Expo project with unique name
+        # Step 3: Create Expo project immediately with basic code
         project_manager.update_project_status(
             project.id,
             models.project.ProjectStatus.INITIALIZING
         )
         
-        logger.info("Generating unique app name")
+        logger.info("Generating unique app name and creating Expo project")
         base_app_name = await code_generator.generate_app_name(sanitized_prompt)
         
         # Make app name unique by adding random suffix
@@ -491,17 +489,17 @@ async def generate(request: GenerateRequest, api_key: str = Depends(verify_api_k
         project.directory = expo_project_dir
         logger.info(f"Expo project created at {expo_project_dir}")
         
-        # Step 5: Generate code using AI
+        # Step 4: Generate basic initial code and write it
         project_manager.update_project_status(
             project.id,
             models.project.ProjectStatus.GENERATING_CODE
         )
         
-        logger.info(f"Generating code for project {project.id}")
+        logger.info(f"Generating initial code for project {project.id}")
         generated_code = await code_generator.generate_app_code(sanitized_prompt)
-        logger.info(f"Code generated successfully for project {project.id}")
+        logger.info(f"Initial code generated successfully for project {project.id}")
         
-        # Step 6: Apply template if specified
+        # Apply template if specified
         if request.template_id:
             logger.info(f"Applying template {request.template_id} to generated code")
             from templates.ui_templates import get_template, apply_template_to_code, generate_template_stylesheet
@@ -516,8 +514,8 @@ async def generate(request: GenerateRequest, api_key: str = Depends(verify_api_k
             else:
                 logger.warning(f"Template {request.template_id} not found, skipping")
         
-        # Step 7: Replace App.js/App.tsx with generated code
-        logger.info(f"Writing generated code to project {project.id}")
+        # Write initial code files
+        logger.info(f"Writing initial code to project {project.id}")
         project_manager.write_code_files(project, generated_code)
         
         # Write template stylesheet if template was applied
@@ -531,55 +529,116 @@ async def generate(request: GenerateRequest, api_key: str = Depends(verify_api_k
                     f.write(stylesheet_content)
                 logger.info(f"Template stylesheet written to theme.ts")
         
-        logger.info(f"Code files written for project {project.id}")
+        logger.info(f"Initial code files written for project {project.id}")
         
-        # Step 8: Install dependencies
+        # Step 5: Run preview setup and screen analysis in parallel
         project_manager.update_project_status(
             project.id,
             models.project.ProjectStatus.INSTALLING_DEPS
         )
         
-        logger.info(f"Installing dependencies for project {project.id}")
-        await command_executor.setup_expo_project(
-            project_dir=project.directory,
-            port=project.port,
-            timeout=300
+        async def setup_preview():
+            """Setup preview: install deps, start server, create tunnel"""
+            logger.info(f"Setting up preview for project {project.id}")
+            
+            # Install dependencies
+            await command_executor.setup_expo_project(
+                project_dir=project.directory,
+                port=project.port,
+                timeout=300
+            )
+            logger.info(f"Dependencies installed for project {project.id}")
+            
+            # Start Expo server
+            project_manager.update_project_status(
+                project.id,
+                models.project.ProjectStatus.STARTING_SERVER
+            )
+            
+            logger.info(f"Starting Expo server for project {project.id} on port {project.port}")
+            expo_process = await command_executor.start_expo_server(
+                project_dir=project.directory,
+                port=project.port
+            )
+            logger.info(f"Expo server started for project {project.id} (PID: {expo_process.pid})")
+            
+            # Create tunnel
+            project_manager.update_project_status(
+                project.id,
+                models.project.ProjectStatus.CREATING_TUNNEL
+            )
+            
+            logger.info(f"Creating tunnel for project {project.id}")
+            preview_url = await tunnel_manager.create_tunnel(
+                port=project.port,
+                project_id=project.id
+            )
+            logger.info(f"Tunnel created for project {project.id}: {preview_url}")
+            
+            return preview_url
+        
+        async def analyze_screens():
+            """Analyze prompt to determine required screens"""
+            logger.info(f"Analyzing prompt for required screens for project {project.id}")
+            if screen_generator:
+                try:
+                    suggestions = await screen_generator.analyze_prompt_suggestions(sanitized_prompt)
+                    logger.info(f"Screen analysis complete: {suggestions.get('total_screens', 0)} screens needed")
+                    return suggestions
+                except Exception as e:
+                    logger.warning(f"Screen analysis failed: {e}, continuing without additional screens")
+                    return None
+            return None
+        
+        # Run preview setup and screen analysis in parallel
+        logger.info(f"Starting parallel execution: preview setup + screen analysis")
+        preview_url, screen_suggestions = await asyncio.gather(
+            setup_preview(),
+            analyze_screens()
         )
-        logger.info(f"Dependencies installed for project {project.id}")
         
-        # Step 8: Start Expo server (in background)
-        project_manager.update_project_status(
-            project.id,
-            models.project.ProjectStatus.STARTING_SERVER
-        )
-        
-        logger.info(f"Starting Expo server for project {project.id} on port {project.port}")
-        
-        # Start Expo server as background process
-        expo_process = await command_executor.start_expo_server(
-            project_dir=project.directory,
-            port=project.port
-        )
-        
-        logger.info(f"Expo server started for project {project.id} (PID: {expo_process.pid})")
-        
-        # Step 7: Create public tunnel
-        project_manager.update_project_status(
-            project.id,
-            models.project.ProjectStatus.CREATING_TUNNEL
-        )
-        
-        logger.info(f"Creating tunnel for project {project.id}")
-        preview_url = await tunnel_manager.create_tunnel(
-            port=project.port,
-            project_id=project.id
-        )
         tunnel_created = True
-        
         project_manager.update_preview_url(project.id, preview_url)
-        logger.info(f"Tunnel created for project {project.id}: {preview_url}")
         
-        # Step 8: Mark project as ready
+        # Step 6: After preview is ready, generate and add all required screens
+        if screen_suggestions and screen_suggestions.get('total_screens', 0) > 0:
+            logger.info(f"Generating {screen_suggestions['total_screens']} additional screens for project {project.id}")
+            project_manager.update_project_status(
+                project.id,
+                models.project.ProjectStatus.GENERATING_CODE
+            )
+            
+            try:
+                # Generate all screens
+                screen_definitions = await screen_generator.analyze_and_generate_screens(
+                    sanitized_prompt,
+                    generate_images=True
+                )
+                
+                # Write screens to project
+                if screen_definitions:
+                    loop = asyncio.get_event_loop()
+                    created_files = await loop.run_in_executor(
+                        None,
+                        screen_generator.write_screens_to_project,
+                        screen_definitions,
+                        project.directory
+                    )
+                    logger.info(f"Added {len(created_files)} screens to project {project.id}")
+                    
+                    # Generate images for screens in background (non-blocking)
+                    if screen_generator.image_generator:
+                        asyncio.create_task(
+                            screen_generator.generate_images_for_project(
+                                screen_definitions,
+                                project.directory
+                            )
+                        )
+                        logger.info(f"Image generation started in background for project {project.id}")
+            except Exception as e:
+                logger.warning(f"Failed to add additional screens: {e}, continuing with basic app")
+        
+        # Step 7: Mark project as ready
         project_manager.update_project_status(
             project.id,
             models.project.ProjectStatus.READY
