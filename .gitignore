@@ -21,6 +21,7 @@ htmlcov/
 # Environment
 .env
 service-account-key.json
+.history/
 
 # Projects directory
 projects/
