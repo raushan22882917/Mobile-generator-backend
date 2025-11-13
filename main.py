@@ -1123,6 +1123,7 @@ async def get_project_files(project_id: str):
 
 
 @app.get("/projects")
+@app.get("/api/projects")
 async def list_projects():
     """
     List all projects in the projects folder
@@ -1520,6 +1521,7 @@ async def manual_activate_project(project_id: str, request: ManualActivateReques
 
 
 @app.get("/templates")
+@app.get("/api/templates")
 async def get_templates():
     """
     Get all available UI templates
@@ -1532,6 +1534,7 @@ async def get_templates():
         templates = get_all_templates()
         
         return {
+            "success": True,
             "templates": [
                 {
                     "id": t.id,
@@ -1555,8 +1558,11 @@ async def get_templates():
         }
     except Exception as e:
         logger.error(f"Error loading templates: {e}", exc_info=True)
-        # Return empty list instead of error to prevent frontend crash
-        return {"templates": []}
+        # Return empty list with success status to prevent frontend crash
+        return JSONResponse(
+            status_code=200,
+            content={"success": False, "templates": [], "error": str(e)}
+        )
 
 
 @app.get("/template-preview/{template_id}")
