@@ -185,7 +185,10 @@ async def websocket_generate_endpoint(
                 project_id,
                 {
                     "type": "error",
-                    "error": str(e)
+                    "data": {
+                        "error": str(e),
+                        "message": str(e)
+                    }
                 }
             )
         except:

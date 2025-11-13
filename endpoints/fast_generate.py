@@ -111,7 +111,10 @@ async def generate_in_background(
             project_id,
             {
                 "type": "error",
-                "error": str(e)
+                "data": {
+                    "error": str(e),
+                    "message": str(e)
+                }
             }
         )
 

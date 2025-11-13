@@ -20,27 +20,30 @@ class CloudStorageManager:
         Initialize Cloud Storage Manager
         
         Args:
-            bucket_name: GCS bucket name
-            project_id: Google Cloud project ID (optional)
+            bucket_name: GCS bucket name (required)
+            project_id: Google Cloud project ID (required)
         """
+        if not bucket_name:
+            raise ValueError("bucket_name is required")
+        if not project_id:
+            raise ValueError("project_id is required")
+            
         self.bucket_name = bucket_name
         self.project_id = project_id
-        self.client = None
-        self.bucket = None
         
-        if bucket_name:
-            try:
-                self.client = storage.Client(project=project_id)
-                self.bucket = self.client.bucket(bucket_name)
-                logger.info(f"Cloud Storage initialized: {bucket_name}")
-            except Exception as e:
-                logger.warning(f"Cloud Storage not available: {e}")
+        try:
+            self.client = storage.Client(project=project_id)
+            self.bucket = self.client.bucket(bucket_name)
+            logger.info(f"Cloud Storage initialized: {bucket_name}")
+        except Exception as e:
+            logger.error(f"Failed to initialize Cloud Storage: {e}")
+            raise RuntimeError(f"Cloud Storage initialization failed: {e}")
     
     def is_available(self) -> bool:
         """Check if Cloud Storage is available"""
         return self.client is not None and self.bucket is not None
     
-    async def upload_project(self, project_id: str, project_dir: str) -> Optional[str]:
+    async def upload_project(self, project_id: str, project_dir: str) -> str:
         """
         Upload project directory to Cloud Storage
         
@@ -49,11 +52,11 @@ class CloudStorageManager:
             project_dir: Local project directory path
             
         Returns:
-            GCS path or None if failed
+            GCS path
+            
+        Raises:
+            Exception if upload fails
         """
-        if not self.is_available():
-            logger.warning("Cloud Storage not available, skipping upload")
-            return None
         
         try:
             logger.info(f"Uploading project {project_id} to Cloud Storage")
@@ -89,10 +92,10 @@ class CloudStorageManager:
             
         Returns:
             True if successful
+            
+        Raises:
+            Exception if download fails
         """
-        if not self.is_available():
-            logger.warning("Cloud Storage not available")
-            return False
         
         try:
             logger.info(f"Downloading project {project_id} from Cloud Storage")
@@ -132,23 +135,36 @@ class CloudStorageManager:
                     zipf.write(file_path, arcname)
     
     async def list_projects(self) -> list:
-        """List all projects in Cloud Storage"""
-        if not self.is_available():
-            return []
+        """
+        List all projects in Cloud Storage
         
+        Returns:
+            List of project IDs
+            
+        Raises:
+            Exception if listing fails
+        """
         try:
             blobs = self.bucket.list_blobs(prefix="projects/")
             return [blob.name.replace("projects/", "").replace(".zip", "") 
                     for blob in blobs]
         except Exception as e:
             logger.error(f"Failed to list projects: {e}")
-            return []
+            raise
     
     async def delete_project(self, project_id: str) -> bool:
-        """Delete project from Cloud Storage"""
-        if not self.is_available():
-            return False
+        """
+        Delete project from Cloud Storage
         
+        Args:
+            project_id: Project identifier
+            
+        Returns:
+            True if successful
+            
+        Raises:
+            Exception if deletion fails
+        """
         try:
             blob_name = f"projects/{project_id}.zip"
             blob = self.bucket.blob(blob_name)
@@ -157,4 +173,4 @@ class CloudStorageManager:
             return True
         except Exception as e:
             logger.error(f"Failed to delete project: {e}")
-            return False
+            raise

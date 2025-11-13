@@ -19,14 +19,16 @@ class Settings(BaseSettings):
     api_key: str = Field(default="", description="API key for authenticating requests to /generate endpoint")
     require_api_key: bool = Field(default=False, description="Whether to require API key authentication")
     
-    # Google Cloud
+    # Google Cloud (required for production)
     google_cloud_project: str = Field(
-        default="",
-        description="Google Cloud Project ID"
+        ...,
+        min_length=1,
+        description="Google Cloud Project ID (required)"
     )
     google_cloud_bucket: str = Field(
-        default="appforge-projects",
-        description="Google Cloud Storage bucket for project storage"
+        ...,
+        min_length=1,
+        description="Google Cloud Storage bucket for project storage (required)"
     )
     google_application_credentials: str = Field(
         default="",
