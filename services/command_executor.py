@@ -412,7 +412,6 @@ class CommandExecutor:
             
             if sys.platform == 'win32':
                 # Windows: Ensure ProactorEventLoop is set for subprocess support
-                import asyncio
                 loop = asyncio.get_event_loop()
                 if not isinstance(loop, asyncio.ProactorEventLoop):
                     logger.warning("Current event loop is not ProactorEventLoop, setting policy...")

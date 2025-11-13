@@ -362,7 +362,8 @@ class StreamingGenerator:
         message: str,
         progress: int,
         preview_url: Optional[str] = None,
-        screens_added: Optional[List[str]] = None
+        screens_added: Optional[List[str]] = None,
+        error: Optional[str] = None
     ):
         """Send progress update via callback"""
         update = ProgressUpdate(
@@ -370,7 +371,8 @@ class StreamingGenerator:
             message=message,
             progress=progress,
             preview_url=preview_url,
-            screens_added=screens_added
+            screens_added=screens_added,
+            error=error
         )
         
         try:
