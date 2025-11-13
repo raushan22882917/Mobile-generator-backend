@@ -286,9 +286,12 @@ app.add_middleware(
     requests_per_minute=10
 )
 
-# Include streaming generation router
+# Include streaming generation routers
 from endpoints.streaming_generate import router as streaming_router
+from endpoints.fast_generate import router as fast_generate_router
+
 app.include_router(streaming_router, prefix="/api/v1", tags=["streaming"])
+app.include_router(fast_generate_router, prefix="/api/v1", tags=["fast-generate"])
 
 
 # Custom exception handlers

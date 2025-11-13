@@ -25,6 +25,7 @@ class StreamingGenerateRequest(BaseModel):
     prompt: str = Field(..., min_length=10, max_length=5000)
     user_id: Optional[str] = Field(default="anonymous")
     template_id: Optional[str] = Field(default=None)
+    fast_mode: Optional[bool] = Field(default=False, description="Skip additional screens for faster preview")
 
 
 class StreamingGenerateResponse(BaseModel):
@@ -116,6 +117,7 @@ async def websocket_generate_endpoint(
         prompt = data.get("prompt")
         user_id = data.get("user_id", "anonymous")
         template_id = data.get("template_id")
+        fast_mode = data.get("fast_mode", False)
         
         if not prompt:
             await websocket.send_json({
@@ -154,7 +156,8 @@ async def websocket_generate_endpoint(
             prompt=sanitized_prompt,
             user_id=sanitized_user_id,
             project_id=project_id,
-            progress_callback=send_progress
+            progress_callback=send_progress,
+            skip_screens=fast_mode
         )
         
         # Send final result

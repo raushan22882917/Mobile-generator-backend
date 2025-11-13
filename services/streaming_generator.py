@@ -82,7 +82,8 @@ class StreamingGenerator:
         prompt: str,
         user_id: str,
         project_id: str,
-        progress_callback: Callable[[ProgressUpdate], None]
+        progress_callback: Callable[[ProgressUpdate], None],
+        skip_screens: bool = False
     ) -> Dict:
         """
         Generate app with real-time progress updates
@@ -105,14 +106,25 @@ class StreamingGenerator:
                 5
             )
             
-            # Analyze in parallel: app name + screen requirements
-            app_name_task = self.code_generator.generate_app_name(prompt)
-            screen_analysis_task = self.screen_generator.analyze_prompt_suggestions(prompt)
+            # Generate app name quickly (don't wait for AI)
+            import random
+            import string
+            import re
             
-            app_name, screen_suggestions = await asyncio.gather(
-                app_name_task,
-                screen_analysis_task
-            )
+            # Extract keywords from prompt for app name
+            words = re.findall(r'\b[a-z]{3,}\b', prompt.lower())
+            if words:
+                base_name = words[0][:10]
+            else:
+                base_name = "myapp"
+            
+            app_name = base_name
+            
+            # Analyze screens in background (simplified)
+            screen_suggestions = {
+                "total_screens": 4,
+                "screens": ["Home", "Profile", "Settings", "About"]
+            }
             
             # Stage 2: Create project structure (15%)
             await self._send_progress(
@@ -204,20 +216,31 @@ class StreamingGenerator:
             )
             
             # Stage 8: Generate screens progressively (60-85%)
-            await self._send_progress(
-                progress_callback,
-                GenerationStage.GENERATING_SCREENS,
-                "Adding screens with dummy data...",
-                65
-            )
+            screens_added = []
             
-            # Generate screens in batches
-            screens_added = await self._generate_screens_progressively(
-                prompt,
-                project.directory,
-                screen_suggestions,
-                progress_callback
-            )
+            if not skip_screens and screen_suggestions.get('total_screens', 0) > 0:
+                await self._send_progress(
+                    progress_callback,
+                    GenerationStage.GENERATING_SCREENS,
+                    "Adding screens with dummy data...",
+                    65
+                )
+                
+                # Generate screens in batches
+                screens_added = await self._generate_screens_progressively(
+                    prompt,
+                    project.directory,
+                    screen_suggestions,
+                    progress_callback
+                )
+            else:
+                # Skip screen generation for faster preview
+                await self._send_progress(
+                    progress_callback,
+                    GenerationStage.GENERATING_SCREENS,
+                    "Skipping additional screens for faster preview...",
+                    85
+                )
             
             # Stage 9: Add components (90%)
             await self._send_progress(
