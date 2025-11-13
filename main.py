@@ -286,6 +286,10 @@ app.add_middleware(
     requests_per_minute=10
 )
 
+# Include streaming generation router
+from endpoints.streaming_generate import router as streaming_router
+app.include_router(streaming_router, prefix="/api/v1", tags=["streaming"])
+
 
 # Custom exception handlers
 @app.exception_handler(RequestValidationError)
