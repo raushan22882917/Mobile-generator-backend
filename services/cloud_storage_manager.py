@@ -138,13 +138,30 @@ class CloudStorageManager:
             return False
     
     def _create_zip(self, source_dir: str, zip_path: str):
-        """Create ZIP file from directory"""
+        """
+        Create ZIP file from directory
+        
+        Excludes node_modules, package-lock.json and build artifacts to save space.
+        These will be restored using shared dependencies on download.
+        """
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
             for root, dirs, files in os.walk(source_dir):
                 # Skip node_modules and other large folders
-                dirs[:] = [d for d in dirs if d not in ['node_modules', '.expo', '.git']]
+                # These are excluded to save storage space
+                dirs[:] = [d for d in dirs if d not in [
+                    'node_modules',  # Will use shared dependencies
+                    '.expo',         # Build cache
+                    '.git',          # Version control
+                    'dist',          # Build output
+                    'build',         # Build output
+                    '__pycache__'    # Python cache
+                ]]
                 
                 for file in files:
+                    # Skip package-lock.json - will be regenerated with shared deps
+                    if file in ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml']:
+                        continue
+                    
                     file_path = os.path.join(root, file)
                     arcname = os.path.relpath(file_path, source_dir)
                     zipf.write(file_path, arcname)

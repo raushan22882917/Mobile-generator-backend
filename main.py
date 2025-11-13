@@ -183,6 +183,8 @@ cloud_storage_manager: CloudStorageManager = None
 screen_generator = None
 parallel_workflow = None
 cloud_logging_service = None
+shared_deps_manager = None
+project_builder = None
 
 
 @asynccontextmanager
@@ -193,7 +195,7 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting AI Expo App Builder API...")
     
-    global code_generator, project_manager, command_executor, tunnel_manager, resource_monitor, cloud_storage_manager, screen_generator, parallel_workflow, cloud_logging_service
+    global code_generator, project_manager, command_executor, tunnel_manager, resource_monitor, cloud_storage_manager, screen_generator, parallel_workflow, cloud_logging_service, shared_deps_manager, project_builder
     
     # Initialize services
     code_generator = CodeGenerator(
@@ -260,12 +262,26 @@ async def lifespan(app: FastAPI):
         enabled=bool(settings.google_cloud_project)
     )
     
+    # Initialize Shared Dependencies Manager
+    from services.shared_dependencies import SharedDependenciesManager
+    shared_deps_manager = SharedDependenciesManager(
+        shared_dir=os.path.join(settings.projects_base_dir, "shared_node_modules")
+    )
+    
+    # Initialize Project Builder
+    from services.project_builder import ProjectBuilder
+    project_builder = ProjectBuilder(shared_deps_manager=shared_deps_manager)
+    
     logger.info("All services initialized successfully")
     
     yield
     
     # Shutdown
     logger.info("Shutting down AI Expo App Builder API...")
+    
+    # Stop all active builds
+    if project_builder:
+        await project_builder.cleanup_all()
     
     # Close all tunnels
     if tunnel_manager:
@@ -306,10 +322,14 @@ app.add_middleware(
 from endpoints.streaming_generate import router as streaming_router
 from endpoints.fast_generate import router as fast_generate_router
 from endpoints.project_endpoints import router as project_router
+from endpoints.editor_endpoints import router as editor_router
+from endpoints.build_endpoints import router as build_router
 
 app.include_router(streaming_router, prefix="/api/v1", tags=["streaming"])
 app.include_router(fast_generate_router, prefix="/api/v1", tags=["fast-generate"])
 app.include_router(project_router, tags=["projects"])
+app.include_router(editor_router, tags=["editor"])
+app.include_router(build_router, tags=["build"])
 
 
 # Custom exception handlers
@@ -730,13 +750,10 @@ Generate ONLY the complete file content, no explanations."""
             models.project.ProjectStatus.INSTALLING_DEPS
         )
         
-        logger.info("📦 Installing dependencies...")
-        await command_executor.setup_expo_project(
-            project_dir=project.directory,
-            port=project.port,
-            timeout=300
-        )
-        logger.info("✓ Dependencies installed")
+        logger.info("📦 Setting up shared dependencies...")
+        # Use shared node_modules instead of installing for each project
+        await shared_deps_manager.setup_project_with_shared_deps(project.directory)
+        logger.info("✓ Shared dependencies linked")
         
         # Start Expo server
         project_manager.update_project_status(
@@ -1428,44 +1445,20 @@ async def activate_project(project_id: str):
             models.project.ProjectStatus.INSTALLING_DEPS
         )
         
-        # Ensure dependencies are installed before starting server
-        logger.info(f"Setting up Expo project for {project.id} in {project.directory}")
+        # Use shared dependencies instead of installing
+        logger.info(f"Setting up shared dependencies for {project.id} in {project.directory}")
         try:
-            await asyncio.wait_for(
-                command_executor.setup_expo_project(
-                    project_dir=project.directory,
-                    port=project.port,
-                    timeout=600  # 10 minutes for npm install
-                ),
-                timeout=600  # 10 minutes timeout
-            )
-            logger.info(f"Dependencies installed successfully for project {project.id}")
-        except asyncio.TimeoutError:
-            logger.error(f"Dependency installation timed out for project {project.id}")
-            project_manager.update_project_status(
-                project.id,
-                models.project.ProjectStatus.ERROR,
-                error_message="Dependency installation timed out after 10 minutes"
-            )
-            raise DependencyInstallError("Dependency installation timed out")
-        except CommandExecutionError as e:
-            error_msg = f"Failed to install dependencies: {str(e)}"
-            logger.error(error_msg)
+            await shared_deps_manager.setup_project_with_shared_deps(project.directory)
+            logger.info(f"Shared dependencies linked successfully for project {project.id}")
+        except Exception as e:
+            error_msg = f"Failed to setup shared dependencies: {str(e)}"
+            logger.error(error_msg, exc_info=True)
             project_manager.update_project_status(
                 project.id,
                 models.project.ProjectStatus.ERROR,
                 error_message=error_msg
             )
             raise DependencyInstallError(error_msg)
-        except Exception as e:
-            error_msg = f"Unexpected error installing dependencies: {str(e)}"
-            logger.error(error_msg, exc_info=True)
-            project_manager.update_project_status(
-                project.id,
-                models.project.ProjectStatus.ERROR,
-                error_message=str(e)
-            )
-            raise
         
         # Update status to starting server
         project_manager.update_project_status(
