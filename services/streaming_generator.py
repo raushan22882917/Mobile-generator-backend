@@ -308,19 +308,26 @@ class StreamingGenerator:
             # Upload to Cloud Storage if available
             gcs_path = None
             if self.cloud_storage_manager and self.cloud_storage_manager.is_available():
-                try:
-                    logger.info(f"Uploading project {project.id} to Cloud Storage")
-                    gcs_path = await self.cloud_storage_manager.upload_project(
-                        project.id,
-                        project.directory
-                    )
-                    if gcs_path:
-                        logger.info(f"Project uploaded to {gcs_path}")
-                except Exception as e:
-                    logger.error(f"Failed to upload to Cloud Storage: {e}")
-                    # Don't fail the entire generation if upload fails
+                logger.info(f"Uploading project {project.id} to Cloud Storage")
+                gcs_path = await self.cloud_storage_manager.upload_project(
+                    project.id,
+                    project.directory
+                )
+                if gcs_path:
+                    logger.info(f"Project uploaded to {gcs_path}")
+                    
+                    # Clean up local files after successful upload to save disk space
+                    try:
+                        import shutil
+                        logger.info(f"Cleaning up local files for project {project.id}")
+                        shutil.rmtree(project.directory, ignore_errors=True)
+                        logger.info(f"Local files cleaned up for project {project.id}")
+                    except Exception as e:
+                        logger.warning(f"Failed to clean up local files: {e}")
+                else:
+                    logger.warning(f"Failed to upload project {project.id} to Cloud Storage - keeping local files")
             else:
-                logger.warning("Cloud Storage not available - project will not be persisted")
+                logger.warning(f"Cloud Storage not available - keeping project {project.id} locally only")
             
             result = {
                 "success": True,

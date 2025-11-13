@@ -111,6 +111,60 @@ GOOGLE_APPLICATION_CREDENTIALS=path/to/service-account-key.json
 
 ---
 
+---
+
+#### 5. Cloud-Only Storage Architecture
+**Change:** Removed local file persistence - all projects stored exclusively in Cloud Storage
+
+**Architecture:**
+- Projects generated in temporary `/tmp/projects` directory
+- Immediately uploaded to Cloud Storage after generation
+- Local files deleted after successful upload
+- All file access downloads from Cloud Storage on-demand
+
+**Modifications:**
+- `services/streaming_generator.py`: Auto-cleanup after upload
+- `main.py`: Upload and cleanup in `/generate` endpoint
+- `config.py`: Changed default `projects_base_dir` to `/tmp/projects`
+- `.env`: Updated to use `/tmp/projects`
+
+**Benefits:**
+- ✅ No local disk space wasted
+- ✅ Projects persist indefinitely in Cloud Storage
+- ✅ Works perfectly with Cloud Run's ephemeral storage
+- ✅ Automatic cleanup prevents disk full errors
+- ✅ Single source of truth (Cloud Storage bucket)
+
+**Flow:**
+1. Generate project in `/tmp/projects/{project_id}/`
+2. Upload to `gs://bucket/projects/{project_id}.zip`
+3. Delete local files
+4. On access: Download from Cloud Storage if needed
+
+---
+
+#### 6. Auto-Download Projects from Cloud Storage
+**Issue:** `/files/{project_id}` endpoint returned 404 for projects not in local memory
+
+**Root Cause:**
+- On Cloud Run, projects are stored in Cloud Storage, not local memory
+- The `/files/` endpoint only checked in-memory projects
+- After container restart, all projects were "lost"
+
+**Fix:**
+- Updated `/files/{project_id}` endpoint to automatically download from Cloud Storage
+- If project not found in memory, attempts to download from GCS
+- Creates project object in memory after successful download
+- File: `main.py`
+
+**Impact:**
+- ✅ Projects persist across container restarts
+- ✅ File tree accessible even after Cloud Run scales to zero
+- ✅ Seamless experience for users accessing old projects
+- ✅ Automatic fallback to Cloud Storage
+
+---
+
 ## Testing Recommendations
 
 1. Test Expo server startup on Windows
@@ -119,3 +173,4 @@ GOOGLE_APPLICATION_CREDENTIALS=path/to/service-account-key.json
 4. Test WebSocket error messages are properly parsed by client
 5. Verify application fails gracefully if Cloud Storage credentials are missing
 6. Test project upload to GCS after generation completes
+7. Test accessing project files after container restart (auto-download from GCS)

@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     )
     google_application_credentials: str = Field(
         default="",
-        description="Path to Google Cloud credentials JSON file"
+        description="Path to Google Cloud credentials JSON file (optional - uses environment variable or default credentials)"
     )
     
     # Application Settings
@@ -46,8 +46,8 @@ class Settings(BaseSettings):
     
     # Paths
     projects_base_dir: str = Field(
-        default="./projects",
-        description="Base directory for projects (use /tmp for Cloud Run)"
+        default="/tmp/projects",
+        description="Base directory for temporary project files (cleaned up after upload to Cloud Storage)"
     )
     
     @field_validator("openai_api_key")

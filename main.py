@@ -689,7 +689,30 @@ async def generate(request: GenerateRequest, api_key: str = Depends(verify_api_k
             except Exception as e:
                 logger.warning(f"Failed to add additional screens: {e}, continuing with basic app")
         
-        # Step 7: Mark project as ready
+        # Step 7: Upload to Cloud Storage and clean up local files
+        if cloud_storage_manager and cloud_storage_manager.is_available():
+            logger.info(f"Uploading project {project.id} to Cloud Storage")
+            gcs_path = await cloud_storage_manager.upload_project(
+                project.id,
+                project.directory
+            )
+            if gcs_path:
+                logger.info(f"Project uploaded to {gcs_path}")
+                
+                # Clean up local files after successful upload
+                try:
+                    import shutil
+                    logger.info(f"Cleaning up local files for project {project.id}")
+                    shutil.rmtree(project.directory, ignore_errors=True)
+                    logger.info(f"Local files cleaned up for project {project.id}")
+                except Exception as e:
+                    logger.warning(f"Failed to clean up local files: {e}")
+            else:
+                logger.warning(f"Failed to upload project {project.id} to Cloud Storage - keeping local files")
+        else:
+            logger.warning(f"Cloud Storage not available - keeping project {project.id} locally only")
+        
+        # Step 8: Mark project as ready
         project_manager.update_project_status(
             project.id,
             models.project.ProjectStatus.READY
@@ -742,6 +765,57 @@ async def generate(request: GenerateRequest, api_key: str = Depends(verify_api_k
                     logger.error(f"Failed to close tunnel: {tunnel_error}")
 
 
+async def ensure_project_available(project_id: str):
+    """
+    Helper function to ensure project is available locally.
+    If not in memory, attempts to download from Cloud Storage.
+    
+    Returns:
+        Project object if found, None otherwise
+    """
+    # First check if project is in memory
+    project = project_manager.get_project(project_id)
+    
+    if project:
+        return project
+    
+    # If not in memory and Cloud Storage is available, try to download
+    if cloud_storage_manager and cloud_storage_manager.is_available():
+        logger.info(f"Project {project_id} not in memory, attempting to download from Cloud Storage")
+        try:
+            import os
+            from datetime import datetime
+            
+            # Create temporary directory for the project
+            project_dir = os.path.join(settings.projects_base_dir, project_id)
+            os.makedirs(project_dir, exist_ok=True)
+            
+            # Download from Cloud Storage
+            success = await cloud_storage_manager.download_project(project_id, project_dir)
+            
+            if success:
+                logger.info(f"Project {project_id} downloaded successfully from Cloud Storage")
+                # Create project object in memory
+                project = models.project.Project(
+                    id=project_id,
+                    user_id="unknown",
+                    prompt="",
+                    directory=project_dir,
+                    port=0,  # Not running
+                    status=models.project.ProjectStatus.READY,
+                    created_at=datetime.now(),
+                    last_active=datetime.now()
+                )
+                project_manager.active_projects[project_id] = project
+                return project
+            else:
+                logger.warning(f"Failed to download project {project_id} from Cloud Storage")
+        except Exception as e:
+            logger.error(f"Error downloading project from Cloud Storage: {e}")
+    
+    return None
+
+
 @app.get("/status/{project_id}", response_model=ProjectStatusResponse)
 async def get_status(project_id: str):
     """
@@ -759,8 +833,8 @@ async def get_status(project_id: str):
     
     logger.debug(f"Status check for project {validated_project_id}")
     
-    # Get project from manager
-    project = project_manager.get_project(validated_project_id)
+    # Get project from manager (with Cloud Storage fallback)
+    project = await ensure_project_available(validated_project_id)
     
     if not project:
         logger.warning(f"Status requested for non-existent project: {project_id}")
@@ -918,8 +992,8 @@ async def download_project(project_id: str, background_tasks: BackgroundTasks):
     
     logger.info(f"Download requested for project {validated_project_id}")
     
-    # Get project from manager
-    project = project_manager.get_project(validated_project_id)
+    # Get project from manager (with Cloud Storage fallback)
+    project = await ensure_project_available(validated_project_id)
     
     if not project:
         logger.warning(f"Download requested for non-existent project: {project_id}")
@@ -979,8 +1053,8 @@ async def get_project_files(project_id: str):
     
     logger.info(f"File tree requested for project {validated_project_id}")
     
-    # Get project from manager
-    project = project_manager.get_project(validated_project_id)
+    # Get project from manager (with Cloud Storage fallback)
+    project = await ensure_project_available(validated_project_id)
     
     if not project:
         logger.warning(f"File tree requested for non-existent project: {project_id}")
@@ -1193,8 +1267,8 @@ async def activate_project(project_id: str):
     logger.info(f"Activation requested for project {validated_project_id}")
     
     try:
-        # Check if project is already active and ready
-        existing_project = project_manager.get_project(validated_project_id)
+        # Check if project is already active and ready (with Cloud Storage fallback)
+        existing_project = await ensure_project_available(validated_project_id)
         
         if existing_project and existing_project.id in project_manager.active_projects:
             # If project is in error state, allow reactivation by removing it first
@@ -1412,8 +1486,8 @@ async def manual_activate_project(project_id: str, request: ManualActivateReques
     logger.info(f"Manual activation requested for project {validated_project_id}")
     logger.info(f"Preview URL: {request.preview_url}")
     
-    # Get or load project
-    project = project_manager.get_project(validated_project_id)
+    # Get or load project (with Cloud Storage fallback)
+    project = await ensure_project_available(validated_project_id)
     
     if not project:
         raise ProjectNotFoundError(validated_project_id)
