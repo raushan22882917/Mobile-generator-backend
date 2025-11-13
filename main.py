@@ -461,13 +461,16 @@ async def generate(request: GenerateRequest, api_key: str = Depends(verify_api_k
     """
     Generate a new Expo application from natural language prompt
     
-    Optimized parallel workflow:
+    Improved workflow with detailed AI analysis:
     1. Check system capacity
-    2. Create Expo project immediately with basic code
-    3. In parallel:
-       - Setup preview (install deps + start server + create tunnel)
-       - Analyze prompt for required screens
-    4. After preview is ready, generate and add all screens
+    2. AI Analysis Phase - Analyze prompt and decide:
+       - App name
+       - All components needed
+       - All screens with dummy data
+       - Complete app structure
+    3. Create Expo project with analyzed structure
+    4. Generate and add screens one by one with detailed logging
+    5. Setup preview (install deps + start server + create tunnel)
     
     Returns project ID and preview URL on success.
     """
@@ -509,22 +512,98 @@ async def generate(request: GenerateRequest, api_key: str = Depends(verify_api_k
             prompt=sanitized_prompt
         )
         
-        logger.info(f"Created project {project.id}")
+        logger.info(f"✓ Created project {project.id}")
         
-        # Step 3: Create Expo project immediately with basic code
+        # Step 3: AI ANALYSIS PHASE - Comprehensive app structure analysis
         project_manager.update_project_status(
             project.id,
             models.project.ProjectStatus.INITIALIZING
         )
         
-        logger.info("Generating unique app name and creating Expo project")
-        base_app_name = await code_generator.generate_app_name(sanitized_prompt)
+        logger.info("=" * 80)
+        logger.info("🤖 AI ANALYSIS PHASE - Analyzing prompt and planning app structure")
+        logger.info("=" * 80)
+        
+        # Analyze prompt to get complete app structure
+        analysis_prompt = f"""Analyze this app request and provide a complete structure plan:
+
+User Request: {sanitized_prompt}
+
+Provide a detailed JSON response with:
+1. app_name: A short, catchy app name (lowercase, no spaces)
+2. app_title: Full display name
+3. description: Brief app description
+4. screens: Array of screen objects with:
+   - name: Screen name (e.g., "Home", "Profile")
+   - file: File name (e.g., "home.tsx")
+   - description: What this screen does
+   - components: Array of component names needed
+   - dummy_data: Sample data structure for this screen
+5. shared_components: Array of reusable components
+6. navigation_type: "tabs" or "stack"
+
+Example:
+{{
+  "app_name": "taskmaster",
+  "app_title": "TaskMaster",
+  "description": "Simple task management app",
+  "screens": [
+    {{
+      "name": "Home",
+      "file": "index.tsx",
+      "description": "Main task list screen",
+      "components": ["TaskCard", "AddButton"],
+      "dummy_data": {{"tasks": ["Task 1", "Task 2"]}}
+    }}
+  ],
+  "shared_components": ["Button", "Card"],
+  "navigation_type": "tabs"
+}}
+
+Respond ONLY with valid JSON, no other text."""
+
+        logger.info("📊 Analyzing app requirements...")
+        analysis_response = await code_generator.client.responses.create(
+            model=code_generator.model,
+            input=analysis_prompt
+        )
+        
+        # Parse AI analysis
+        import json
+        analysis_text = analysis_response.output_text.strip()
+        # Extract JSON from response (in case AI adds extra text)
+        json_start = analysis_text.find('{')
+        json_end = analysis_text.rfind('}') + 1
+        if json_start >= 0 and json_end > json_start:
+            analysis_text = analysis_text[json_start:json_end]
+        
+        app_structure = json.loads(analysis_text)
+        
+        logger.info("=" * 80)
+        logger.info("📋 APP STRUCTURE ANALYSIS COMPLETE")
+        logger.info("=" * 80)
+        logger.info(f"📱 App Name: {app_structure['app_name']}")
+        logger.info(f"📱 App Title: {app_structure['app_title']}")
+        logger.info(f"📝 Description: {app_structure['description']}")
+        logger.info(f"🧭 Navigation: {app_structure['navigation_type']}")
+        logger.info(f"📄 Total Screens: {len(app_structure['screens'])}")
+        logger.info(f"🧩 Shared Components: {len(app_structure.get('shared_components', []))}")
+        logger.info("")
+        logger.info("📄 SCREENS TO BE CREATED:")
+        for idx, screen in enumerate(app_structure['screens'], 1):
+            logger.info(f"  {idx}. {screen['name']} ({screen['file']})")
+            logger.info(f"     └─ {screen['description']}")
+        logger.info("=" * 80)
+        
+        # Step 4: Create Expo project with analyzed app name
+        logger.info("")
+        logger.info("🚀 Creating Expo project...")
         
         # Make app name unique by adding random suffix
         unique_suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=4))
-        app_name = f"{base_app_name}{unique_suffix}"
+        app_name = f"{app_structure['app_name']}{unique_suffix}"
         
-        logger.info(f"Generated unique app name: {app_name} (base: {base_app_name})")
+        logger.info(f"✓ App name: {app_name}")
         
         # Get parent directory (projects folder)
         parent_dir = os.path.dirname(project.directory)
@@ -538,179 +617,179 @@ async def generate(request: GenerateRequest, api_key: str = Depends(verify_api_k
         
         # Update project directory to the created expo project
         project.directory = expo_project_dir
-        logger.info(f"Expo project created at {expo_project_dir}")
+        logger.info(f"✓ Expo project created at {expo_project_dir}")
         
-        # Step 4: Generate basic initial code and write it
+        # Step 5: Generate and write screens ONE BY ONE with detailed logging
         project_manager.update_project_status(
             project.id,
             models.project.ProjectStatus.GENERATING_CODE
         )
         
-        logger.info(f"Generating initial code for project {project.id}")
-        generated_code = await code_generator.generate_app_code(sanitized_prompt)
-        logger.info(f"Initial code generated successfully for project {project.id}")
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("💻 CODE GENERATION PHASE - Creating screens sequentially")
+        logger.info("=" * 80)
+        
+        created_files = []
+        
+        # Generate each screen one by one
+        for idx, screen_info in enumerate(app_structure['screens'], 1):
+            logger.info("")
+            logger.info(f"📝 [{idx}/{len(app_structure['screens'])}] Generating: {screen_info['name']} Screen")
+            logger.info(f"   File: app/{screen_info['file']}")
+            logger.info(f"   Description: {screen_info['description']}")
+            
+            # Generate code for this specific screen
+            screen_prompt = f"""Generate a complete React Native Expo screen file.
+
+Screen Details:
+- Name: {screen_info['name']}
+- File: {screen_info['file']}
+- Description: {screen_info['description']}
+- Components needed: {', '.join(screen_info.get('components', []))}
+- Dummy data: {json.dumps(screen_info.get('dummy_data', {}))}
+
+App Context:
+- App: {app_structure['app_title']}
+- Navigation: {app_structure['navigation_type']}
+
+Requirements:
+1. Use TypeScript with proper types
+2. Include the dummy data in the component
+3. Use React Native components (View, Text, ScrollView, etc.)
+4. Make it responsive and styled
+5. Add proper imports
+6. Use functional components with hooks
+7. Include inline styles using StyleSheet
+
+Generate ONLY the complete file content, no explanations."""
+
+            logger.info(f"   ⏳ Calling AI to generate code...")
+            screen_response = await code_generator.client.responses.create(
+                model=code_generator.model,
+                input=screen_prompt
+            )
+            
+            screen_code = screen_response.output_text.strip()
+            
+            # Clean up code (remove markdown code blocks if present)
+            if screen_code.startswith('```'):
+                lines = screen_code.split('\n')
+                screen_code = '\n'.join(lines[1:-1]) if len(lines) > 2 else screen_code
+            
+            # Write screen file
+            screen_path = os.path.join(project.directory, "app", screen_info['file'])
+            os.makedirs(os.path.dirname(screen_path), exist_ok=True)
+            
+            with open(screen_path, 'w', encoding='utf-8') as f:
+                f.write(screen_code)
+            
+            created_files.append(f"app/{screen_info['file']}")
+            logger.info(f"   ✓ Screen code written to app/{screen_info['file']}")
+            logger.info(f"   ✓ Lines of code: {len(screen_code.splitlines())}")
+        
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info(f"✅ CODE GENERATION COMPLETE - {len(created_files)} screens created")
+        logger.info("=" * 80)
         
         # Apply template if specified
         if request.template_id:
-            logger.info(f"Applying template {request.template_id} to generated code")
+            logger.info("")
+            logger.info(f"🎨 Applying template: {request.template_id}")
             from templates.ui_templates import get_template, apply_template_to_code, generate_template_stylesheet
             
             template = get_template(request.template_id)
             if template:
-                # Apply template to generated code
-                for code_file in generated_code.files:
-                    code_file.content = apply_template_to_code(code_file.content, template)
+                for file_path in created_files:
+                    full_path = os.path.join(project.directory, file_path)
+                    with open(full_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    
+                    updated_content = apply_template_to_code(content, template)
+                    
+                    with open(full_path, 'w', encoding='utf-8') as f:
+                        f.write(updated_content)
                 
-                logger.info(f"Template {template.name} applied successfully")
-            else:
-                logger.warning(f"Template {request.template_id} not found, skipping")
-        
-        # Write initial code files
-        logger.info(f"Writing initial code to project {project.id}")
-        project_manager.write_code_files(project, generated_code)
-        
-        # Write template stylesheet if template was applied
-        if request.template_id:
-            template = get_template(request.template_id)
-            if template:
-                from templates.ui_templates import generate_template_stylesheet
+                # Write template stylesheet
                 stylesheet_content = generate_template_stylesheet(template)
                 stylesheet_path = os.path.join(project.directory, "theme.ts")
                 with open(stylesheet_path, 'w', encoding='utf-8') as f:
                     f.write(stylesheet_content)
-                logger.info(f"Template stylesheet written to theme.ts")
+                
+                logger.info(f"✓ Template {template.name} applied successfully")
         
-        logger.info(f"Initial code files written for project {project.id}")
+        # Step 6: Setup preview (install deps, start server, create tunnel)
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("🔧 PREVIEW SETUP PHASE")
+        logger.info("=" * 80)
         
-        # Step 5: Run preview setup and screen analysis in parallel
         project_manager.update_project_status(
             project.id,
             models.project.ProjectStatus.INSTALLING_DEPS
         )
         
-        async def setup_preview():
-            """Setup preview: install deps, start server, create tunnel"""
-            logger.info(f"Setting up preview for project {project.id}")
-            
-            # Install dependencies
-            await command_executor.setup_expo_project(
-                project_dir=project.directory,
-                port=project.port,
-                timeout=300
-            )
-            logger.info(f"Dependencies installed for project {project.id}")
-            
-            # Start Expo server
-            project_manager.update_project_status(
-                project.id,
-                models.project.ProjectStatus.STARTING_SERVER
-            )
-            
-            logger.info(f"Starting Expo server for project {project.id} on port {project.port}")
-            expo_process = await command_executor.start_expo_server(
-                project_dir=project.directory,
-                port=project.port
-            )
-            logger.info(f"Expo server started for project {project.id} (PID: {expo_process.pid})")
-            
-            # Create tunnel
-            project_manager.update_project_status(
-                project.id,
-                models.project.ProjectStatus.CREATING_TUNNEL
-            )
-            
-            logger.info(f"Creating tunnel for project {project.id}")
-            preview_url = await tunnel_manager.create_tunnel(
-                port=project.port,
-                project_id=project.id
-            )
-            logger.info(f"Tunnel created for project {project.id}: {preview_url}")
-            
-            return preview_url
-        
-        async def analyze_screens():
-            """Analyze prompt to determine required screens"""
-            logger.info(f"Analyzing prompt for required screens for project {project.id}")
-            if screen_generator:
-                try:
-                    suggestions = await screen_generator.analyze_prompt_suggestions(sanitized_prompt)
-                    logger.info(f"Screen analysis complete: {suggestions.get('total_screens', 0)} screens needed")
-                    return suggestions
-                except Exception as e:
-                    logger.warning(f"Screen analysis failed: {e}, continuing without additional screens")
-                    return None
-            return None
-        
-        # Run preview setup and screen analysis in parallel
-        logger.info(f"Starting parallel execution: preview setup + screen analysis")
-        preview_url, screen_suggestions = await asyncio.gather(
-            setup_preview(),
-            analyze_screens()
+        logger.info("📦 Installing dependencies...")
+        await command_executor.setup_expo_project(
+            project_dir=project.directory,
+            port=project.port,
+            timeout=300
         )
+        logger.info("✓ Dependencies installed")
+        
+        # Start Expo server
+        project_manager.update_project_status(
+            project.id,
+            models.project.ProjectStatus.STARTING_SERVER
+        )
+        
+        logger.info(f"🚀 Starting Expo server on port {project.port}...")
+        expo_process = await command_executor.start_expo_server(
+            project_dir=project.directory,
+            port=project.port
+        )
+        logger.info(f"✓ Expo server started (PID: {expo_process.pid})")
+        
+        # Create tunnel
+        project_manager.update_project_status(
+            project.id,
+            models.project.ProjectStatus.CREATING_TUNNEL
+        )
+        
+        logger.info("🌐 Creating ngrok tunnel...")
+        preview_url = await tunnel_manager.create_tunnel(
+            port=project.port,
+            project_id=project.id
+        )
+        logger.info(f"✓ Tunnel created: {preview_url}")
         
         tunnel_created = True
         project_manager.update_preview_url(project.id, preview_url)
         
-        # Step 6: After preview is ready, generate and add all required screens
-        if screen_suggestions and screen_suggestions.get('total_screens', 0) > 0:
-            logger.info(f"Generating {screen_suggestions['total_screens']} additional screens for project {project.id}")
-            project_manager.update_project_status(
-                project.id,
-                models.project.ProjectStatus.GENERATING_CODE
-            )
-            
-            try:
-                # Generate all screens
-                screen_definitions = await screen_generator.analyze_and_generate_screens(
-                    sanitized_prompt,
-                    generate_images=True
-                )
-                
-                # Write screens to project
-                if screen_definitions:
-                    loop = asyncio.get_event_loop()
-                    created_files = await loop.run_in_executor(
-                        None,
-                        screen_generator.write_screens_to_project,
-                        screen_definitions,
-                        project.directory
-                    )
-                    logger.info(f"Added {len(created_files)} screens to project {project.id}")
-                    
-                    # Generate images for screens in background (non-blocking)
-                    if screen_generator.image_generator:
-                        asyncio.create_task(
-                            screen_generator.generate_images_for_project(
-                                screen_definitions,
-                                project.directory
-                            )
-                        )
-                        logger.info(f"Image generation started in background for project {project.id}")
-            except Exception as e:
-                logger.warning(f"Failed to add additional screens: {e}, continuing with basic app")
-        
         # Step 7: Upload to Cloud Storage and clean up local files
+        logger.info("")
+        logger.info("☁️  Uploading to Cloud Storage...")
         if cloud_storage_manager and cloud_storage_manager.is_available():
-            logger.info(f"Uploading project {project.id} to Cloud Storage")
             gcs_path = await cloud_storage_manager.upload_project(
                 project.id,
                 project.directory
             )
             if gcs_path:
-                logger.info(f"Project uploaded to {gcs_path}")
+                logger.info(f"✓ Project uploaded to {gcs_path}")
                 
                 # Clean up local files after successful upload
                 try:
                     import shutil
-                    logger.info(f"Cleaning up local files for project {project.id}")
+                    logger.info(f"🧹 Cleaning up local files...")
                     shutil.rmtree(project.directory, ignore_errors=True)
-                    logger.info(f"Local files cleaned up for project {project.id}")
+                    logger.info(f"✓ Local files cleaned up")
                 except Exception as e:
-                    logger.warning(f"Failed to clean up local files: {e}")
+                    logger.warning(f"⚠️  Failed to clean up local files: {e}")
             else:
-                logger.warning(f"Failed to upload project {project.id} to Cloud Storage - keeping local files")
+                logger.warning(f"⚠️  Failed to upload to Cloud Storage - keeping local files")
         else:
-            logger.warning(f"Cloud Storage not available - keeping project {project.id} locally only")
+            logger.info("ℹ️  Cloud Storage not available - keeping project locally only")
         
         # Step 8: Mark project as ready
         project_manager.update_project_status(
@@ -722,15 +801,21 @@ async def generate(request: GenerateRequest, api_key: str = Depends(verify_api_k
         generation_time = time.time() - start_time
         resource_monitor.record_project_creation(generation_time)
         
-        logger.info(
-            f"Project {project.id} generation completed successfully in {generation_time:.2f}s"
-        )
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("🎉 PROJECT GENERATION COMPLETE!")
+        logger.info("=" * 80)
+        logger.info(f"✓ Project ID: {project.id}")
+        logger.info(f"✓ Preview URL: {preview_url}")
+        logger.info(f"✓ Screens Created: {len(created_files)}")
+        logger.info(f"✓ Generation Time: {generation_time:.2f}s")
+        logger.info("=" * 80)
         
         return GenerateResponse(
             project_id=project.id,
             preview_url=preview_url,
             status="success",
-            message="App generated successfully",
+            message=f"App generated successfully with {len(created_files)} screens",
             created_at=project.created_at.isoformat()
         )
         

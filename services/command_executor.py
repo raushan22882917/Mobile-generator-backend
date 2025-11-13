@@ -254,6 +254,20 @@ class CommandExecutor:
         
         logger.info("Dependencies installed successfully")
         
+        # Step 1.5: Install missing 'send' module (Expo CLI dependency issue workaround)
+        logger.info("Installing 'send' module (Expo CLI dependency)...")
+        send_install = await self.run_command(
+            command="npm install send",
+            cwd=project_dir,
+            timeout=60  # 1 minute for single package
+        )
+        
+        if not send_install.success:
+            logger.warning(f"Failed to install 'send' module: {send_install.stderr}")
+            # Don't fail the whole setup, just log warning
+        else:
+            logger.info("'send' module installed successfully")
+        
         # Step 2: Verify expo CLI is available
         logger.info("Verifying Expo CLI...")
         expo_check = await self.run_command(

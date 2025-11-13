@@ -22,6 +22,9 @@ class CloudStorageManager:
         Args:
             bucket_name: GCS bucket name (required for production)
             project_id: Google Cloud project ID (required for production)
+        
+        Note: In Cloud Run, this will use the default service account automatically.
+        No service account key file is needed.
         """
         self.bucket_name = bucket_name
         self.project_id = project_id
@@ -33,11 +36,21 @@ class CloudStorageManager:
             return
             
         try:
+            # In Cloud Run, this automatically uses the default service account
+            # No credentials file needed!
             self.client = storage.Client(project=project_id)
             self.bucket = self.client.bucket(bucket_name)
-            logger.info(f"Cloud Storage initialized: {bucket_name}")
+            
+            # Test bucket access
+            if self.bucket.exists():
+                logger.info(f"✅ Cloud Storage initialized successfully: {bucket_name}")
+            else:
+                logger.error(f"❌ Bucket does not exist: {bucket_name}")
+                self.client = None
+                self.bucket = None
         except Exception as e:
-            logger.error(f"Failed to initialize Cloud Storage: {e}")
+            logger.error(f"❌ Failed to initialize Cloud Storage: {e}")
+            logger.error(f"   Project: {project_id}, Bucket: {bucket_name}")
             self.client = None
             self.bucket = None
     
