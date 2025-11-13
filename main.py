@@ -1211,7 +1211,7 @@ async def get_project_files(project_id: str):
 @app.get("/api/projects")
 async def list_projects():
     """
-    List all projects in the projects folder
+    List all projects from local storage AND Cloud Storage
     
     Returns a list of all projects with their metadata
     """
@@ -1222,69 +1222,106 @@ async def list_projects():
         from pathlib import Path
         from datetime import datetime
         
+        projects_list = []
+        project_ids_seen = set()
+        
+        # 1. Scan local projects directory
         projects_dir = Path(settings.projects_base_dir)
         
-        if not projects_dir.exists():
-            return {"projects": []}
-        
-        projects_list = []
-        
-        # Scan projects directory
-        for project_dir in projects_dir.iterdir():
-            if not project_dir.is_dir():
-                continue
-            
-            project_id = project_dir.name
-            
-            # Get project from active projects or read from disk
-            project = project_manager.get_project(project_id)
-            
-            if project:
-                # Active project
-                projects_list.append({
-                    "id": project.id,
-                    "name": project_id,
-                    "status": project.status.value,
-                    "preview_url": project.preview_url,
-                    "preview_urls": project.preview_urls,
-                    "created_at": project.created_at.isoformat(),
-                    "last_active": project.last_active.isoformat(),
-                    "prompt": project.prompt[:100] + "..." if len(project.prompt) > 100 else project.prompt,
-                    "is_active": True
-                })
-            else:
-                # Inactive project - read metadata from disk
-                try:
-                    # Check if package.json exists
-                    package_json = project_dir / "package.json"
-                    if package_json.exists():
-                        # Get creation time
-                        created_time = datetime.fromtimestamp(os.path.getctime(str(project_dir)))
-                        modified_time = datetime.fromtimestamp(os.path.getmtime(str(project_dir)))
-                        
-                        projects_list.append({
-                            "id": project_id,
-                            "name": project_id,
-                            "status": "inactive",
-                            "preview_url": None,
-                            "preview_urls": [],
-                            "created_at": created_time.isoformat(),
-                            "last_active": modified_time.isoformat(),
-                            "prompt": "Project created previously",
-                            "is_active": False
-                        })
-                except Exception as e:
-                    logger.warning(f"Error reading project {project_id}: {e}")
+        if projects_dir.exists():
+            for project_dir in projects_dir.iterdir():
+                if not project_dir.is_dir():
                     continue
+                
+                project_id = project_dir.name
+                project_ids_seen.add(project_id)
+                
+                # Get project from active projects or read from disk
+                project = project_manager.get_project(project_id)
+                
+                if project:
+                    # Active project
+                    projects_list.append({
+                        "id": project.id,
+                        "name": project_id,
+                        "status": project.status.value,
+                        "preview_url": project.preview_url,
+                        "preview_urls": project.preview_urls,
+                        "created_at": project.created_at.isoformat(),
+                        "last_active": project.last_active.isoformat(),
+                        "prompt": project.prompt[:100] + "..." if len(project.prompt) > 100 else project.prompt,
+                        "is_active": True,
+                        "source": "local"
+                    })
+                else:
+                    # Inactive project - read metadata from disk
+                    try:
+                        # Check if package.json exists
+                        package_json = project_dir / "package.json"
+                        if package_json.exists():
+                            # Get creation time
+                            created_time = datetime.fromtimestamp(os.path.getctime(str(project_dir)))
+                            modified_time = datetime.fromtimestamp(os.path.getmtime(str(project_dir)))
+                            
+                            projects_list.append({
+                                "id": project_id,
+                                "name": project_id,
+                                "status": "inactive",
+                                "preview_url": None,
+                                "preview_urls": [],
+                                "created_at": created_time.isoformat(),
+                                "last_active": modified_time.isoformat(),
+                                "prompt": "Project created previously",
+                                "is_active": False,
+                                "source": "local"
+                            })
+                    except Exception as e:
+                        logger.warning(f"Error reading project {project_id}: {e}")
+                        continue
+        
+        # 2. Scan Cloud Storage bucket for projects
+        if cloud_storage_manager and cloud_storage_manager.is_available():
+            try:
+                logger.info("Scanning Cloud Storage for projects...")
+                cloud_projects = await cloud_storage_manager.list_projects()
+                
+                for cloud_project_id in cloud_projects:
+                    # Skip if already seen in local storage
+                    if cloud_project_id in project_ids_seen:
+                        continue
+                    
+                    project_ids_seen.add(cloud_project_id)
+                    
+                    # Get metadata from Cloud Storage
+                    metadata = await cloud_storage_manager.get_project_metadata(cloud_project_id)
+                    
+                    projects_list.append({
+                        "id": cloud_project_id,
+                        "name": cloud_project_id,
+                        "status": "archived",
+                        "preview_url": None,
+                        "preview_urls": [],
+                        "created_at": metadata.get("created_at", datetime.now().isoformat()),
+                        "last_active": metadata.get("last_active", datetime.now().isoformat()),
+                        "prompt": metadata.get("prompt", "Project stored in Cloud Storage")[:100],
+                        "is_active": False,
+                        "source": "cloud_storage"
+                    })
+                
+                logger.info(f"Found {len(cloud_projects)} projects in Cloud Storage")
+            except Exception as e:
+                logger.warning(f"Failed to list Cloud Storage projects: {e}")
         
         # Sort by last_active (most recent first)
         projects_list.sort(key=lambda x: x["last_active"], reverse=True)
         
-        logger.info(f"Found {len(projects_list)} projects")
+        logger.info(f"Found {len(projects_list)} total projects (local + cloud)")
         
         return {
             "projects": projects_list,
-            "total": len(projects_list)
+            "total": len(projects_list),
+            "local_count": sum(1 for p in projects_list if p.get("source") == "local"),
+            "cloud_count": sum(1 for p in projects_list if p.get("source") == "cloud_storage")
         }
         
     except Exception as e:

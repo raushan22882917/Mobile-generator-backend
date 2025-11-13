@@ -162,10 +162,53 @@ class CloudStorageManager:
         try:
             blobs = self.bucket.list_blobs(prefix="projects/")
             return [blob.name.replace("projects/", "").replace(".zip", "") 
-                    for blob in blobs]
+                    for blob in blobs if blob.name.endswith(".zip")]
         except Exception as e:
             logger.error(f"Failed to list projects: {e}")
             raise
+    
+    async def get_project_metadata(self, project_id: str) -> dict:
+        """
+        Get project metadata from Cloud Storage
+        
+        Args:
+            project_id: Project identifier
+            
+        Returns:
+            Dictionary with metadata (created_at, last_active, size, etc.)
+            
+        Raises:
+            Exception if metadata retrieval fails
+        """
+        try:
+            blob_name = f"projects/{project_id}.zip"
+            blob = self.bucket.blob(blob_name)
+            
+            # Reload to get latest metadata
+            blob.reload()
+            
+            return {
+                "project_id": project_id,
+                "created_at": blob.time_created.isoformat() if blob.time_created else None,
+                "last_active": blob.updated.isoformat() if blob.updated else None,
+                "size_bytes": blob.size,
+                "size_mb": round(blob.size / (1024 * 1024), 2) if blob.size else 0,
+                "content_type": blob.content_type,
+                "prompt": f"Project {project_id[:8]}",  # We don't store prompt in metadata yet
+                "storage_class": blob.storage_class
+            }
+        except Exception as e:
+            logger.warning(f"Failed to get metadata for project {project_id}: {e}")
+            # Return default metadata if blob doesn't exist or error occurs
+            from datetime import datetime
+            return {
+                "project_id": project_id,
+                "created_at": datetime.now().isoformat(),
+                "last_active": datetime.now().isoformat(),
+                "size_bytes": 0,
+                "size_mb": 0,
+                "prompt": f"Project {project_id[:8]}"
+            }
     
     async def delete_project(self, project_id: str) -> bool:
         """
