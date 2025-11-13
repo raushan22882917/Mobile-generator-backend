@@ -91,6 +91,12 @@ async def download_from_storage(project_id: str):
     from fastapi.responses import StreamingResponse
     import io
     
+    if not cloud_storage_manager or not cloud_storage_manager.is_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Cloud Storage not configured. Cannot download projects."
+        )
+    
     try:
         # Get blob from GCS
         blob_name = f"projects/{project_id}.zip"

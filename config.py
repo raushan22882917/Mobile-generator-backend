@@ -21,14 +21,12 @@ class Settings(BaseSettings):
     
     # Google Cloud (required for production)
     google_cloud_project: str = Field(
-        ...,
-        min_length=1,
-        description="Google Cloud Project ID (required)"
+        default="",
+        description="Google Cloud Project ID (required for production)"
     )
     google_cloud_bucket: str = Field(
-        ...,
-        min_length=1,
-        description="Google Cloud Storage bucket for project storage (required)"
+        default="",
+        description="Google Cloud Storage bucket for project storage (required for production)"
     )
     google_application_credentials: str = Field(
         default="",

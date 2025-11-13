@@ -224,19 +224,19 @@ async def lifespan(app: FastAPI):
         min_disk_percent=settings.min_disk_percent
     )
     
-    # Initialize Cloud Storage Manager (mandatory)
+    # Initialize Cloud Storage Manager
     cloud_storage_manager = CloudStorageManager(
         bucket_name=settings.google_cloud_bucket,
         project_id=settings.google_cloud_project
     )
     
     if not cloud_storage_manager.is_available():
-        logger.error("Cloud Storage is not configured - this is required for production")
-        raise RuntimeError(
-            "Cloud Storage must be configured. Set GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_BUCKET environment variables."
+        logger.warning(
+            "Cloud Storage is not configured. Projects will not be persisted. "
+            "Set GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_BUCKET for production."
         )
-    
-    logger.info(f"Cloud Storage enabled: {settings.google_cloud_bucket}")
+    else:
+        logger.info(f"Cloud Storage enabled: {settings.google_cloud_bucket}")
     
     # Initialize screen generator and parallel workflow
     from services.screen_generator import ScreenGenerator

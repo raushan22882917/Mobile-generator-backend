@@ -20,24 +20,26 @@ class CloudStorageManager:
         Initialize Cloud Storage Manager
         
         Args:
-            bucket_name: GCS bucket name (required)
-            project_id: Google Cloud project ID (required)
+            bucket_name: GCS bucket name (required for production)
+            project_id: Google Cloud project ID (required for production)
         """
-        if not bucket_name:
-            raise ValueError("bucket_name is required")
-        if not project_id:
-            raise ValueError("project_id is required")
-            
         self.bucket_name = bucket_name
         self.project_id = project_id
+        self.client = None
+        self.bucket = None
         
+        if not bucket_name or not project_id:
+            logger.warning("Cloud Storage not configured - bucket_name and project_id are required")
+            return
+            
         try:
             self.client = storage.Client(project=project_id)
             self.bucket = self.client.bucket(bucket_name)
             logger.info(f"Cloud Storage initialized: {bucket_name}")
         except Exception as e:
             logger.error(f"Failed to initialize Cloud Storage: {e}")
-            raise RuntimeError(f"Cloud Storage initialization failed: {e}")
+            self.client = None
+            self.bucket = None
     
     def is_available(self) -> bool:
         """Check if Cloud Storage is available"""

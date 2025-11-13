@@ -305,16 +305,22 @@ class StreamingGenerator:
                 screens_added=screens_added
             )
             
-            # Upload to Cloud Storage (mandatory)
-            logger.info(f"Uploading project {project.id} to Cloud Storage")
-            gcs_path = await self.cloud_storage_manager.upload_project(
-                project.id,
-                project.directory
-            )
-            if gcs_path:
-                logger.info(f"Project uploaded to {gcs_path}")
+            # Upload to Cloud Storage if available
+            gcs_path = None
+            if self.cloud_storage_manager and self.cloud_storage_manager.is_available():
+                try:
+                    logger.info(f"Uploading project {project.id} to Cloud Storage")
+                    gcs_path = await self.cloud_storage_manager.upload_project(
+                        project.id,
+                        project.directory
+                    )
+                    if gcs_path:
+                        logger.info(f"Project uploaded to {gcs_path}")
+                except Exception as e:
+                    logger.error(f"Failed to upload to Cloud Storage: {e}")
+                    # Don't fail the entire generation if upload fails
             else:
-                raise Exception("Failed to upload project to Cloud Storage")
+                logger.warning("Cloud Storage not available - project will not be persisted")
             
             result = {
                 "success": True,
