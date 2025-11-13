@@ -159,9 +159,22 @@ Original endpoint - waits for completion before returning.
 ---
 
 ### 4. Get Project Status
-**GET** `/status/{project_id}`
+**GET** `/project-status/{project_id}`
 
-Check current status of a project.
+Check current status of a project (simple version).
+
+#### Response
+```json
+{
+  "project_id": "abc-123",
+  "status": "ready",
+  "preview_url": "https://abc.ngrok.io",
+  "error": null,
+  "exists": true
+}
+```
+
+**Alternative:** GET `/status/{project_id}` (detailed version)
 
 #### Response
 ```json

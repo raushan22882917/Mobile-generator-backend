@@ -20,9 +20,18 @@ class Settings(BaseSettings):
     require_api_key: bool = Field(default=False, description="Whether to require API key authentication")
     
     # Google Cloud
-    google_cloud_project: str = ""
-    google_cloud_bucket: str = ""
-    google_application_credentials: str = ""
+    google_cloud_project: str = Field(
+        default="",
+        description="Google Cloud Project ID"
+    )
+    google_cloud_bucket: str = Field(
+        default="appforge-projects",
+        description="Google Cloud Storage bucket for project storage"
+    )
+    google_application_credentials: str = Field(
+        default="",
+        description="Path to Google Cloud credentials JSON file"
+    )
     
     # Application Settings
     max_concurrent_projects: int = 10
@@ -36,7 +45,10 @@ class Settings(BaseSettings):
     min_disk_percent: float = 5.0
     
     # Paths
-    projects_base_dir: str = "./projects"
+    projects_base_dir: str = Field(
+        default="./projects",
+        description="Base directory for projects (use /tmp for Cloud Run)"
+    )
     
     @field_validator("openai_api_key")
     @classmethod

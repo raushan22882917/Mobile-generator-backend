@@ -28,6 +28,7 @@ from services.project_manager import ProjectManager
 from services.command_executor import CommandExecutor
 from services.tunnel_manager import TunnelManager
 from services.resource_monitor import ResourceMonitor
+from services.cloud_storage_manager import CloudStorageManager
 from utils.sanitization import sanitize_prompt, sanitize_user_id, validate_project_id, SanitizationError
 import models.project
 from exceptions import (
@@ -178,6 +179,7 @@ project_manager: ProjectManager = None
 command_executor: CommandExecutor = None
 tunnel_manager: TunnelManager = None
 resource_monitor: ResourceMonitor = None
+cloud_storage_manager: CloudStorageManager = None
 screen_generator = None
 parallel_workflow = None
 cloud_logging_service = None
@@ -191,7 +193,7 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting AI Expo App Builder API...")
     
-    global code_generator, project_manager, command_executor, tunnel_manager, resource_monitor, screen_generator, parallel_workflow, cloud_logging_service
+    global code_generator, project_manager, command_executor, tunnel_manager, resource_monitor, cloud_storage_manager, screen_generator, parallel_workflow, cloud_logging_service
     
     # Initialize services
     code_generator = CodeGenerator(
@@ -221,6 +223,17 @@ async def lifespan(app: FastAPI):
         max_memory_percent=settings.max_memory_percent,
         min_disk_percent=settings.min_disk_percent
     )
+    
+    # Initialize Cloud Storage Manager
+    cloud_storage_manager = CloudStorageManager(
+        bucket_name=settings.google_cloud_bucket,
+        project_id=settings.google_cloud_project
+    )
+    
+    if cloud_storage_manager.is_available():
+        logger.info(f"Cloud Storage enabled: {settings.google_cloud_bucket}")
+    else:
+        logger.info("Cloud Storage not configured (projects will be temporary)")
     
     # Initialize screen generator and parallel workflow
     from services.screen_generator import ScreenGenerator
@@ -289,9 +302,11 @@ app.add_middleware(
 # Include streaming generation routers
 from endpoints.streaming_generate import router as streaming_router
 from endpoints.fast_generate import router as fast_generate_router
+from endpoints.project_endpoints import router as project_router
 
 app.include_router(streaming_router, prefix="/api/v1", tags=["streaming"])
 app.include_router(fast_generate_router, prefix="/api/v1", tags=["fast-generate"])
+app.include_router(project_router, tags=["projects"])
 
 
 # Custom exception handlers

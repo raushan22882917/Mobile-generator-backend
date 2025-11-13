@@ -43,6 +43,7 @@ async def create_streaming_generator():
         project_manager,
         command_executor,
         tunnel_manager,
+        cloud_storage_manager,
         resource_monitor
     )
     
@@ -59,7 +60,8 @@ async def create_streaming_generator():
         screen_generator=screen_generator,
         project_manager=project_manager,
         command_executor=command_executor,
-        tunnel_manager=tunnel_manager
+        tunnel_manager=tunnel_manager,
+        cloud_storage_manager=cloud_storage_manager
     )
 
 

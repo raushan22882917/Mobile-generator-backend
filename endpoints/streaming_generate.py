@@ -43,7 +43,8 @@ async def create_streaming_generator():
         screen_generator,
         project_manager,
         command_executor,
-        tunnel_manager
+        tunnel_manager,
+        cloud_storage_manager
     )
     
     if not all([code_generator, screen_generator, project_manager, 
@@ -55,7 +56,8 @@ async def create_streaming_generator():
         screen_generator=screen_generator,
         project_manager=project_manager,
         command_executor=command_executor,
-        tunnel_manager=tunnel_manager
+        tunnel_manager=tunnel_manager,
+        cloud_storage_manager=cloud_storage_manager
     )
 
 

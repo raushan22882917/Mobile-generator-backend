@@ -68,7 +68,8 @@ class StreamingGenerator:
         screen_generator,
         project_manager,
         command_executor,
-        tunnel_manager
+        tunnel_manager,
+        cloud_storage_manager=None
     ):
         """Initialize with service dependencies"""
         self.code_generator = code_generator
@@ -76,6 +77,7 @@ class StreamingGenerator:
         self.project_manager = project_manager
         self.command_executor = command_executor
         self.tunnel_manager = tunnel_manager
+        self.cloud_storage_manager = cloud_storage_manager
         
     async def generate_with_streaming(
         self,
@@ -134,7 +136,27 @@ class StreamingGenerator:
                 15
             )
             
-            project = self.project_manager.create_project(user_id, prompt)
+            # Create project with the provided project_id
+            import models.project
+            from datetime import datetime
+            
+            # Get or create project
+            existing_project = self.project_manager.get_project(project_id)
+            if existing_project:
+                project = existing_project
+            else:
+                # Create new project with specific ID
+                project = models.project.Project(
+                    id=project_id,
+                    user_id=user_id,
+                    prompt=prompt,
+                    directory=f"{self.project_manager.base_dir}/{project_id}",
+                    port=self.project_manager.port_manager.allocate_port(),
+                    status=models.project.ProjectStatus.INITIALIZING,
+                    created_at=datetime.now(),
+                    last_active=datetime.now()
+                )
+                self.project_manager.active_projects[project_id] = project
             
             # Create Expo project with minimal template
             import os
@@ -283,16 +305,47 @@ class StreamingGenerator:
                 screens_added=screens_added
             )
             
-            return {
+            # Upload to Cloud Storage if available
+            gcs_path = None
+            if self.cloud_storage_manager and self.cloud_storage_manager.is_available():
+                try:
+                    logger.info(f"Uploading project {project.id} to Cloud Storage")
+                    gcs_path = await self.cloud_storage_manager.upload_project(
+                        project.id,
+                        project.directory
+                    )
+                    if gcs_path:
+                        logger.info(f"Project uploaded to {gcs_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to upload to Cloud Storage: {e}")
+            
+            result = {
                 "success": True,
                 "project_id": project.id,
                 "preview_url": preview_url,
                 "screens_added": screens_added,
-                "app_name": full_app_name
+                "app_name": full_app_name,
+                "gcs_path": gcs_path
             }
+            
+            logger.info(f"Project {project.id} completed successfully")
+            return result
             
         except Exception as e:
             logger.error(f"Streaming generation failed: {e}", exc_info=True)
+            
+            # Update project status to error if project exists
+            if 'project' in locals() and project:
+                try:
+                    import models.project
+                    self.project_manager.update_project_status(
+                        project.id,
+                        models.project.ProjectStatus.ERROR,
+                        error_message=str(e)
+                    )
+                except Exception as status_error:
+                    logger.error(f"Failed to update project status: {status_error}")
+            
             await self._send_progress(
                 progress_callback,
                 GenerationStage.ERROR,
