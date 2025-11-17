@@ -487,6 +487,34 @@ class ProjectLogsResponse(BaseModel):
     cloud_logging_enabled: bool
 
 
+class SupabaseConfigRequest(BaseModel):
+    """Request model for Supabase configuration"""
+    supabase_url: str = Field(..., min_length=1, description="Supabase project URL")
+    supabase_anon_key: str = Field(..., min_length=1, description="Supabase anonymous key")
+
+
+class SupabaseConfigResponse(BaseModel):
+    """Response model for Supabase configuration"""
+    success: bool
+    message: str
+    project_id: str
+
+
+class SupabaseConfigStatusResponse(BaseModel):
+    """Response model for Supabase configuration status"""
+    configured: bool
+    has_url: bool
+    has_key: bool
+    message: str
+
+
+class SupabaseTestResponse(BaseModel):
+    """Response model for Supabase connection test"""
+    success: bool
+    message: str
+    project_name: Optional[str] = None
+
+
 # API Endpoints
 @app.post("/generate", response_model=GenerateResponse, status_code=status.HTTP_201_CREATED)
 async def generate(request: GenerateRequest, api_key: str = Depends(verify_api_key)):
@@ -3121,6 +3149,231 @@ from datetime import datetime
 class ImageGenerateRequest(BaseModel):
     prompt: str
     project_id: str
+
+@app.put("/projects/{project_id}/supabase-config", response_model=SupabaseConfigResponse)
+async def update_supabase_config(
+    project_id: str,
+    request: SupabaseConfigRequest,
+    api_key: str = Depends(verify_api_key)
+):
+    """
+    Update Supabase configuration for a project
+    
+    Updates .env file and app.json with Supabase credentials
+    """
+    from utils.sanitization import sanitize_project_id
+    import json
+    import re
+    
+    try:
+        validated_project_id = sanitize_project_id(project_id)
+    except SanitizationError as e:
+        raise ValidationError(str(e))
+    
+    project = project_manager.get_project(validated_project_id)
+    if not project:
+        raise ProjectNotFoundError(validated_project_id)
+    
+    # Validate URL format
+    url_pattern = re.compile(r'^https://[a-zA-Z0-9-]+\.supabase\.co/?$')
+    if not url_pattern.match(request.supabase_url):
+        raise ValidationError("Invalid Supabase URL format. Should be: https://xxxxx.supabase.co")
+    
+    try:
+        # Update .env file
+        env_path = os.path.join(project.directory, ".env")
+        if os.path.exists(env_path):
+            with open(env_path, 'r', encoding='utf-8') as f:
+                env_content = f.read()
+            
+            # Replace or add Supabase variables
+            if 'EXPO_PUBLIC_SUPABASE_URL=' in env_content:
+                env_content = re.sub(
+                    r'EXPO_PUBLIC_SUPABASE_URL=.*',
+                    f'EXPO_PUBLIC_SUPABASE_URL={request.supabase_url}',
+                    env_content
+                )
+            else:
+                env_content += f'\nEXPO_PUBLIC_SUPABASE_URL={request.supabase_url}\n'
+            
+            if 'EXPO_PUBLIC_SUPABASE_ANON_KEY=' in env_content:
+                env_content = re.sub(
+                    r'EXPO_PUBLIC_SUPABASE_ANON_KEY=.*',
+                    f'EXPO_PUBLIC_SUPABASE_ANON_KEY={request.supabase_anon_key}',
+                    env_content
+                )
+            else:
+                env_content += f'EXPO_PUBLIC_SUPABASE_ANON_KEY={request.supabase_anon_key}\n'
+            
+            with open(env_path, 'w', encoding='utf-8') as f:
+                f.write(env_content)
+        else:
+            # Create .env file if it doesn't exist
+            env_content = f"""# Supabase Configuration
+EXPO_PUBLIC_SUPABASE_URL={request.supabase_url}
+EXPO_PUBLIC_SUPABASE_ANON_KEY={request.supabase_anon_key}
+"""
+            with open(env_path, 'w', encoding='utf-8') as f:
+                f.write(env_content)
+        
+        # Update app.json
+        app_json_path = os.path.join(project.directory, "app.json")
+        if os.path.exists(app_json_path):
+            with open(app_json_path, 'r', encoding='utf-8') as f:
+                app_json = json.load(f)
+            
+            if 'expo' not in app_json:
+                app_json = {'expo': app_json}
+            
+            if 'extra' not in app_json['expo']:
+                app_json['expo']['extra'] = {}
+            
+            app_json['expo']['extra']['supabaseUrl'] = request.supabase_url
+            app_json['expo']['extra']['supabaseAnonKey'] = request.supabase_anon_key
+            
+            with open(app_json_path, 'w', encoding='utf-8') as f:
+                json.dump(app_json, f, indent=2)
+        
+        logger.info(f"Updated Supabase config for project {validated_project_id}")
+        
+        return SupabaseConfigResponse(
+            success=True,
+            message="Supabase configuration updated successfully",
+            project_id=validated_project_id
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to update Supabase config: {e}", exc_info=True)
+        raise AppBuilderError(f"Failed to update Supabase configuration: {str(e)}")
+
+
+@app.get("/projects/{project_id}/supabase-config", response_model=SupabaseConfigStatusResponse)
+async def get_supabase_config_status(
+    project_id: str,
+    api_key: str = Depends(verify_api_key)
+):
+    """
+    Get Supabase configuration status for a project
+    """
+    from utils.sanitization import sanitize_project_id
+    
+    try:
+        validated_project_id = sanitize_project_id(project_id)
+    except SanitizationError as e:
+        raise ValidationError(str(e))
+    
+    project = project_manager.get_project(validated_project_id)
+    if not project:
+        raise ProjectNotFoundError(validated_project_id)
+    
+    try:
+        # Check .env file
+        env_path = os.path.join(project.directory, ".env")
+        has_url = False
+        has_key = False
+        
+        if os.path.exists(env_path):
+            with open(env_path, 'r', encoding='utf-8') as f:
+                env_content = f.read()
+                has_url = 'EXPO_PUBLIC_SUPABASE_URL=' in env_content and 'your_supabase_project_url_here' not in env_content
+                has_key = 'EXPO_PUBLIC_SUPABASE_ANON_KEY=' in env_content and 'your_supabase_anon_key_here' not in env_content
+        
+        # Check app.json
+        app_json_path = os.path.join(project.directory, "app.json")
+        if os.path.exists(app_json_path):
+            with open(app_json_path, 'r', encoding='utf-8') as f:
+                app_json = json.load(f)
+            
+            if 'expo' in app_json and 'extra' in app_json['expo']:
+                extra = app_json['expo']['extra']
+                if extra.get('supabaseUrl') and extra.get('supabaseUrl') != '':
+                    has_url = True
+                if extra.get('supabaseAnonKey') and extra.get('supabaseAnonKey') != '':
+                    has_key = True
+        
+        configured = has_url and has_key
+        
+        return SupabaseConfigStatusResponse(
+            configured=configured,
+            has_url=has_url,
+            has_key=has_key,
+            message="Supabase is configured" if configured else "Supabase is not configured"
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to get Supabase config status: {e}", exc_info=True)
+        return SupabaseConfigStatusResponse(
+            configured=False,
+            has_url=False,
+            has_key=False,
+            message=f"Error checking configuration: {str(e)}"
+        )
+
+
+@app.post("/projects/{project_id}/test-supabase", response_model=SupabaseTestResponse)
+async def test_supabase_connection(
+    project_id: str,
+    request: SupabaseConfigRequest,
+    api_key: str = Depends(verify_api_key)
+):
+    """
+    Test Supabase connection with provided credentials
+    """
+    from utils.sanitization import sanitize_project_id
+    import httpx
+    
+    try:
+        validated_project_id = sanitize_project_id(project_id)
+    except SanitizationError as e:
+        raise ValidationError(str(e))
+    
+    project = project_manager.get_project(validated_project_id)
+    if not project:
+        raise ProjectNotFoundError(validated_project_id)
+    
+    try:
+        # Test connection by making a simple API call to Supabase
+        # We'll try to get the project info
+        test_url = f"{request.supabase_url}/rest/v1/"
+        headers = {
+            "apikey": request.supabase_anon_key,
+            "Authorization": f"Bearer {request.supabase_anon_key}"
+        }
+        
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(test_url, headers=headers)
+            
+            if response.status_code in [200, 401, 403]:
+                # 401/403 means the endpoint exists but we might not have access
+                # This is still a valid connection
+                return SupabaseTestResponse(
+                    success=True,
+                    message="Connection successful",
+                    project_name=None
+                )
+            else:
+                return SupabaseTestResponse(
+                    success=False,
+                    message=f"Connection failed: HTTP {response.status_code}"
+                )
+                
+    except httpx.TimeoutException:
+        return SupabaseTestResponse(
+            success=False,
+            message="Connection timeout. Please check your Supabase URL."
+        )
+    except httpx.RequestError as e:
+        return SupabaseTestResponse(
+            success=False,
+            message=f"Connection error: {str(e)}"
+        )
+    except Exception as e:
+        logger.error(f"Failed to test Supabase connection: {e}", exc_info=True)
+        return SupabaseTestResponse(
+            success=False,
+            message=f"Error testing connection: {str(e)}"
+        )
+
 
 @app.post("/generate-image")
 async def generate_image(request: ImageGenerateRequest):
