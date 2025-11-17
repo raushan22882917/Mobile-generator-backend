@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     ngrok_auth_token: str = Field(..., min_length=1, description="Ngrok authentication token for tunneling")
     
     # Optional API Keys
-    gemini_api_key: str = Field(default="", description="Google Gemini API key for image generation (optional)")
+    gemini_api_key: str = Field(default="", description="Google Gemini API key for fallback when OpenAI quota exceeded (optional)")
     
     # API Authentication
     api_key: str = Field(default="", description="API key for authenticating requests to /generate endpoint")

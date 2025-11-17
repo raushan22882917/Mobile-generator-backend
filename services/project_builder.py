@@ -93,13 +93,26 @@ class ProjectBuilder:
         logger.info("Dependencies installed successfully")
     
     async def _start_server(self, project_dir: str, port: int) -> asyncio.subprocess.Process:
-        """Start Expo development server"""
+        """Start Expo development server with NODE_PATH to global modules"""
         logger.info(f"Starting Expo server on port {port}")
         
         # Set environment variables
         env = os.environ.copy()
         env['PORT'] = str(port)
         env['EXPO_DEVTOOLS_LISTEN_ADDRESS'] = '0.0.0.0'
+        
+        # Add NODE_PATH to use global node_modules
+        global_node_modules = self.shared_deps_manager.global_node_modules
+        if global_node_modules.exists():
+            env['NODE_PATH'] = str(global_node_modules)
+            logger.info(f"Using global node_modules: {global_node_modules}")
+            
+            # Ensure 'send' module is installed (required by Expo CLI)
+            send_module_path = global_node_modules / "send"
+            if not (send_module_path.exists() and (send_module_path / "package.json").exists()):
+                logger.info("Ensuring 'send' module is installed in global node_modules...")
+                # Ensure global modules are installed (this will install send if it's in the dependencies)
+                await self.shared_deps_manager.ensure_global_modules_installed()
         
         # Start server
         process = await asyncio.create_subprocess_exec(

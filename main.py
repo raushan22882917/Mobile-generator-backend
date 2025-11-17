@@ -197,12 +197,24 @@ async def lifespan(app: FastAPI):
     
     global code_generator, project_manager, command_executor, tunnel_manager, resource_monitor, cloud_storage_manager, screen_generator, parallel_workflow, cloud_logging_service, shared_deps_manager, project_builder
     
-    # Initialize services
+    # Initialize services with multi-AI support (OpenAI + Gemini fallback)
+    from services.multi_ai_generator import MultiAIGenerator
+    
+    multi_ai = MultiAIGenerator(
+        openai_key=settings.openai_api_key,
+        gemini_key=settings.gemini_api_key if settings.gemini_api_key else None,
+        model="gpt-5",
+        timeout=settings.code_generation_timeout
+    )
+    
     code_generator = CodeGenerator(
         api_key=settings.openai_api_key,
         model="gpt-5",
         timeout=settings.code_generation_timeout
     )
+    
+    # Replace code_generator's client with multi-AI wrapper
+    code_generator.client = multi_ai
     
     project_manager = ProjectManager(
         base_dir=settings.projects_base_dir,
@@ -2715,6 +2727,10 @@ To enable real image generation:
             content={"error": f"Failed to generate image: {str(e)}"}
         )
 
+
+# Ensure app is accessible for uvicorn
+# This helps prevent "Attribute not found" errors
+__all__ = ["app"]
 
 if __name__ == "__main__":
     import uvicorn

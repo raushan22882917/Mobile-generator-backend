@@ -286,6 +286,42 @@ class CommandExecutor:
         logger.info(f"To start the server, run: npm start")
         return True
     
+    async def _ensure_send_module_installed(self, global_node_modules_path: Path) -> None:
+        """
+        Ensure 'send' module is installed in global node_modules (required by Expo CLI)
+        
+        Args:
+            global_node_modules_path: Path to global node_modules directory
+        """
+        send_module_path = global_node_modules_path / "send"
+        
+        # Check if send module exists
+        if send_module_path.exists() and (send_module_path / "package.json").exists():
+            logger.debug("'send' module already installed in global node_modules")
+            return
+        
+        logger.info("'send' module not found, installing in global node_modules...")
+        
+        # Install send module in the global node_modules directory
+        # We need to install it in the parent directory (where package.json is)
+        global_package_dir = global_node_modules_path.parent
+        
+        try:
+            install_result = await self.run_command(
+                command="npm install send@^0.18.0 --legacy-peer-deps",
+                cwd=str(global_package_dir),
+                timeout=120  # 2 minutes
+            )
+            
+            if install_result.success:
+                logger.info("'send' module installed successfully in global node_modules")
+            else:
+                logger.warning(f"Failed to install 'send' module: {install_result.stderr[:200]}")
+                # Don't fail - Expo might still work if send is available elsewhere
+        except Exception as e:
+            logger.warning(f"Error installing 'send' module: {e}")
+            # Don't fail - continue and hope send is available via NODE_PATH
+    
     async def _is_port_listening(self, port: int) -> bool:
         """
         Check if a port is listening (server is ready)
@@ -423,6 +459,29 @@ class CommandExecutor:
             env['REACT_NATIVE_PACKAGER_HOSTNAME'] = '0.0.0.0'  # Metro bundler hostname
             env['EXPO_NO_DOTENV'] = '1'  # Disable .env file loading to avoid conflicts
             env['EXPO_NO_GIT_STATUS'] = '1'  # Disable git status check
+            
+            # Add NODE_PATH to use global shared node_modules
+            # Try to get path from settings, fallback to default
+            try:
+                from config import settings
+                base_dir = settings.projects_base_dir
+            except:
+                base_dir = "/tmp/projects"
+            
+            global_node_modules_path = Path(base_dir).parent / "shared_node_modules" / "global" / "node_modules"
+            
+            # Fallback to /tmp if the above doesn't exist
+            if not global_node_modules_path.exists():
+                global_node_modules_path = Path("/tmp/shared_node_modules/global/node_modules")
+            
+            if global_node_modules_path.exists():
+                env['NODE_PATH'] = str(global_node_modules_path)
+                logger.info(f"Using global node_modules: {global_node_modules_path}")
+                
+                # Ensure 'send' module is installed in global node_modules (required by Expo CLI)
+                await self._ensure_send_module_installed(global_node_modules_path)
+            else:
+                logger.warning(f"Global node_modules not found at {global_node_modules_path}, NODE_PATH not set")
             
             if sys.platform == 'win32':
                 # Windows: Ensure ProactorEventLoop is set for subprocess support
