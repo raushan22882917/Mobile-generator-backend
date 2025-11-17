@@ -12,7 +12,7 @@ import time
 import json
 from datetime import datetime
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, status, BackgroundTasks, Depends, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, status, BackgroundTasks, Depends, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.exceptions import RequestValidationError
@@ -24,6 +24,8 @@ if sys.platform == 'win32':
 from config import settings
 from middleware.auth import verify_api_key
 from middleware.rate_limit import RateLimitMiddleware
+from middleware.jwt_auth import get_current_user
+from models.user import User
 from services.code_generator import CodeGenerator
 from services.project_manager import ProjectManager
 from services.command_executor import CommandExecutor
@@ -196,7 +198,10 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting AI Expo App Builder API...")
     
-    global code_generator, project_manager, command_executor, tunnel_manager, resource_monitor, cloud_storage_manager, screen_generator, parallel_workflow, cloud_logging_service, shared_deps_manager, project_builder
+    global code_generator, project_manager, command_executor, tunnel_manager, resource_monitor, cloud_storage_manager, screen_generator, parallel_workflow, cloud_logging_service, shared_deps_manager, project_builder, auth_service
+    
+    # Initialize auth_service as None first
+    auth_service = None
     
     # Initialize services with multi-AI support (OpenAI + Gemini fallback)
     from services.multi_ai_generator import MultiAIGenerator
@@ -284,6 +289,13 @@ async def lifespan(app: FastAPI):
     # Initialize Project Builder
     from services.project_builder import ProjectBuilder
     project_builder = ProjectBuilder(shared_deps_manager=shared_deps_manager)
+    
+    # Initialize Authentication Service
+    from services.auth_service import AuthService
+    from middleware.jwt_auth import set_auth_service
+    auth_service = AuthService(users_dir=os.path.join(settings.projects_base_dir, "users"))
+    set_auth_service(auth_service)
+    logger.info("Authentication service initialized")
     
     logger.info("All services initialized successfully")
     
@@ -455,6 +467,252 @@ class ProjectStatusResponse(BaseModel):
 class HealthResponse(BaseModel):
     """Response model for /health endpoint"""
     status: str
+    version: str
+    timestamp: str
+
+
+class MetricsResponse(BaseModel):
+    """Response model for /metrics endpoint"""
+    cpu_percent: float
+    memory_percent: float
+    disk_percent: float
+    active_projects: int
+    total_projects_created: int
+
+
+class LogEntryResponse(BaseModel):
+    """Response model for log entry"""
+    timestamp: str
+    level: str
+    message: str
+    resource_type: str
+    labels: dict
+
+
+class ProjectLogsResponse(BaseModel):
+    """Response model for /logs/{project_id} endpoint"""
+    project_id: str
+    total_logs: int
+    logs: List[LogEntryResponse]
+    time_range_hours: int
+    cloud_logging_enabled: bool
+
+
+class SupabaseConfigRequest(BaseModel):
+    """Request model for Supabase configuration"""
+    supabase_url: str = Field(..., min_length=1, description="Supabase project URL")
+    supabase_anon_key: str = Field(..., min_length=1, description="Supabase anonymous key")
+
+
+class SupabaseConfigResponse(BaseModel):
+    """Response model for Supabase configuration"""
+    success: bool
+    message: str
+    project_id: str
+
+
+class SupabaseConfigStatusResponse(BaseModel):
+    """Response model for Supabase configuration status"""
+    configured: bool
+    has_url: bool
+    has_key: bool
+    message: str
+
+
+class SupabaseTestResponse(BaseModel):
+    """Response model for Supabase connection test"""
+    success: bool
+    message: str
+    project_name: Optional[str] = None
+
+
+class SignupRequest(BaseModel):
+    """Request model for user signup"""
+    email: str = Field(..., min_length=5, description="User email address")
+    password: str = Field(..., min_length=6, description="User password (min 6 characters)")
+    name: Optional[str] = Field(default=None, description="Optional user name")
+
+
+class LoginRequest(BaseModel):
+    """Request model for user login"""
+    email: str = Field(..., description="User email address")
+    password: str = Field(..., description="User password")
+
+
+class AuthResponse(BaseModel):
+    """Response model for authentication"""
+    success: bool
+    message: str
+    token: Optional[str] = None
+    user: Optional[dict] = None
+
+
+class UserResponse(BaseModel):
+    """Response model for user information"""
+    id: str
+    email: str
+    name: Optional[str]
+    created_at: str
+    last_login: Optional[str]
+
+
+# Authentication Endpoints
+@app.post("/auth/signup", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
+async def signup(request: SignupRequest):
+    """
+    Register a new user account
+    
+    Creates a new user account with email and password.
+    Returns JWT token for immediate authentication.
+    """
+    try:
+        user = auth_service.register_user(
+            email=request.email,
+            password=request.password,
+            name=request.name
+        )
+        
+        # Generate JWT token
+        token = auth_service.generate_token(user)
+        
+        logger.info(f"New user registered: {user.email}")
+        
+        return AuthResponse(
+            success=True,
+            message="User registered successfully",
+            token=token,
+            user=user.to_dict(include_password=False)
+        )
+        
+    except ValueError as e:
+        logger.warning(f"Signup failed: {e}")
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "success": False,
+                "message": str(e)
+            }
+        )
+    except Exception as e:
+        logger.error(f"Signup error: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "success": False,
+                "message": "Failed to create user account"
+            }
+        )
+
+
+@app.post("/auth/login", response_model=AuthResponse)
+async def login(request: LoginRequest):
+    """
+    Authenticate user and return JWT token
+    
+    Validates email and password, returns JWT token for API access.
+    """
+    if not auth_service:
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"success": False, "message": "Authentication service not initialized"}
+        )
+    
+    try:
+        user = auth_service.authenticate_user(
+            email=request.email,
+            password=request.password
+        )
+        
+        if not user:
+            return JSONResponse(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content={
+                    "success": False,
+                    "message": "Invalid email or password"
+                }
+            )
+        
+        # Generate JWT token
+        token = auth_service.generate_token(user)
+        
+        logger.info(f"User logged in: {user.email}")
+        
+        return AuthResponse(
+            success=True,
+            message="Login successful",
+            token=token,
+            user=user.to_dict(include_password=False)
+        )
+        
+    except Exception as e:
+        logger.error(f"Login error: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "success": False,
+                "message": "Login failed"
+            }
+        )
+
+
+@app.get("/auth/me", response_model=UserResponse)
+async def get_current_user_info(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get current authenticated user information
+    
+    Returns the user profile of the authenticated user.
+    """
+    return UserResponse(
+        id=current_user.id,
+        email=current_user.email,
+        name=current_user.name,
+        created_at=current_user.created_at.isoformat(),
+        last_login=current_user.last_login.isoformat() if current_user.last_login else None
+    )
+
+
+# Request/Response Models
+from pydantic import BaseModel, Field
+from typing import Optional, List
+from datetime import datetime
+
+
+class GenerateRequest(BaseModel):
+    """Request model for /generate endpoint"""
+    prompt: str = Field(..., min_length=10, max_length=5000, description="Natural language description of the app")
+    user_id: Optional[str] = Field(default="anonymous", description="User identifier")
+    template_id: Optional[str] = Field(default=None, description="UI template ID to apply")
+
+
+class AnalyzePromptRequest(BaseModel):
+    """Request model for /analyze-prompt endpoint"""
+    prompt: str = Field(..., min_length=10, max_length=5000, description="Natural language description of the app")
+
+
+class GenerateResponse(BaseModel):
+    """Response model for /generate endpoint"""
+    project_id: str
+    preview_url: Optional[str] = None
+    status: str
+    message: str
+    created_at: str
+
+
+class ProjectStatusResponse(BaseModel):
+    """Response model for /status endpoint"""
+    project_id: str
+    status: str
+    preview_url: Optional[str] = None
+    error: Optional[str] = None
+    created_at: str
+    last_active: str
+
+
+class HealthResponse(BaseModel):
+    """Response model for /health endpoint"""
+    status: str
     timestamp: str
     active_projects: int
     system_metrics: Optional[dict] = None
@@ -518,7 +776,10 @@ class SupabaseTestResponse(BaseModel):
 
 # API Endpoints
 @app.post("/generate", response_model=GenerateResponse, status_code=status.HTTP_201_CREATED)
-async def generate(request: GenerateRequest, api_key: str = Depends(verify_api_key)):
+async def generate(
+    request: GenerateRequest,
+    current_user: User = Depends(get_current_user)
+):
     """
     Generate a new Expo application from natural language prompt
     
@@ -541,12 +802,13 @@ async def generate(request: GenerateRequest, api_key: str = Depends(verify_api_k
     # Sanitize inputs
     try:
         sanitized_prompt = sanitize_prompt(request.prompt)
-        sanitized_user_id = sanitize_user_id(request.user_id)
+        # Use authenticated user's ID instead of request.user_id
+        sanitized_user_id = current_user.id
     except SanitizationError as e:
         logger.warning(f"Input sanitization failed: {str(e)}")
         raise ValidationError(str(e))
     
-    logger.info(f"Received generation request from user {sanitized_user_id}")
+    logger.info(f"Received generation request from user {current_user.email} (ID: {sanitized_user_id})")
     logger.info(f"Prompt: {sanitized_prompt[:100]}...")
     
     project = None
@@ -1468,12 +1730,16 @@ async def ensure_project_available(project_id: str):
 
 
 @app.get("/status/{project_id}", response_model=ProjectStatusResponse)
-async def get_status(project_id: str):
+async def get_status(
+    project_id: str,
+    current_user: User = Depends(get_current_user)
+):
     """
     Get current status of a project generation
     
     Returns project status, preview URL (if ready), and error information (if failed).
     This endpoint is used by the frontend to poll for progress updates.
+    Only returns projects belonging to the authenticated user.
     """
     # Validate project ID
     try:
@@ -1482,7 +1748,7 @@ async def get_status(project_id: str):
         logger.warning(f"Invalid project ID: {project_id}")
         raise ValidationError(str(e))
     
-    logger.debug(f"Status check for project {validated_project_id}")
+    logger.debug(f"Status check for project {validated_project_id} by user {current_user.email}")
     
     # Get project from manager (with Cloud Storage fallback)
     project = await ensure_project_available(validated_project_id)
@@ -1490,6 +1756,14 @@ async def get_status(project_id: str):
     if not project:
         logger.warning(f"Status requested for non-existent project: {project_id}")
         raise ProjectNotFoundError(project_id)
+    
+    # Verify project belongs to authenticated user
+    if project.user_id != current_user.id:
+        logger.warning(f"User {current_user.email} attempted to access project {project_id} belonging to {project.user_id}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have access to this project"
+        )
     
     return ProjectStatusResponse(
         project_id=project.id,
@@ -1626,7 +1900,11 @@ async def get_project_logs(
 
 
 @app.get("/download/{project_id}")
-async def download_project(project_id: str, background_tasks: BackgroundTasks):
+async def download_project(
+    project_id: str,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user)
+):
     """
     Download project as ZIP archive
     
@@ -1649,6 +1927,14 @@ async def download_project(project_id: str, background_tasks: BackgroundTasks):
     if not project:
         logger.warning(f"Download requested for non-existent project: {project_id}")
         raise ProjectNotFoundError(project_id)
+    
+    # Verify project belongs to authenticated user
+    if project.user_id != current_user.id:
+        logger.warning(f"User {current_user.email} attempted to download project {project_id} belonging to {project.user_id}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have access to this project"
+        )
     
     # Check if project is ready
     if project.status != models.project.ProjectStatus.READY:
@@ -1689,7 +1975,10 @@ async def download_project(project_id: str, background_tasks: BackgroundTasks):
 
 
 @app.get("/files/{project_id}")
-async def get_project_files(project_id: str):
+async def get_project_files(
+    project_id: str,
+    current_user: User = Depends(get_current_user)
+):
     """
     Get project file tree structure
     
@@ -1710,6 +1999,14 @@ async def get_project_files(project_id: str):
     if not project:
         logger.warning(f"File tree requested for non-existent project: {project_id}")
         raise ProjectNotFoundError(project_id)
+    
+    # Verify project belongs to authenticated user
+    if project.user_id != current_user.id:
+        logger.warning(f"User {current_user.email} attempted to access files for project {project_id} belonging to {project.user_id}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have access to this project"
+        )
     
     try:
         import os
@@ -1775,13 +2072,13 @@ async def get_project_files(project_id: str):
 
 @app.get("/projects")
 @app.get("/api/projects")
-async def list_projects():
+async def list_projects(current_user: User = Depends(get_current_user)):
     """
-    List all projects from local storage AND Cloud Storage
+    List all projects for the authenticated user
     
-    Returns a list of all projects with their metadata
+    Returns a list of all projects belonging to the logged-in user.
     """
-    logger.info("Projects list requested")
+    logger.info(f"Projects list requested by user {current_user.email}")
     
     try:
         import os
@@ -1806,22 +2103,24 @@ async def list_projects():
                 project = project_manager.get_project(project_id)
                 
                 if project:
-                    # Active project
-                    projects_list.append({
-                        "id": project.id,
-                        "name": project_id,
-                        "status": project.status.value,
-                        "preview_url": project.preview_url,
-                        "preview_urls": project.preview_urls,
-                        "tunnel_urls": [tunnel.to_dict() for tunnel in project.tunnel_urls],
-                        "latest_tunnel_url": project.get_latest_tunnel_url(),
-                        "active_tunnel_count": len(project.get_active_tunnel_urls()),
-                        "created_at": project.created_at.isoformat(),
-                        "last_active": project.last_active.isoformat(),
-                        "prompt": project.prompt[:100] + "..." if len(project.prompt) > 100 else project.prompt,
-                        "is_active": True,
-                        "source": "local"
-                    })
+                    # Only include projects belonging to the authenticated user
+                    if project.user_id == current_user.id:
+                        # Active project
+                        projects_list.append({
+                            "id": project.id,
+                            "name": project_id,
+                            "status": project.status.value,
+                            "preview_url": project.preview_url,
+                            "preview_urls": project.preview_urls,
+                            "tunnel_urls": [tunnel.to_dict() for tunnel in project.tunnel_urls],
+                            "latest_tunnel_url": project.get_latest_tunnel_url(),
+                            "active_tunnel_count": len(project.get_active_tunnel_urls()),
+                            "created_at": project.created_at.isoformat(),
+                            "last_active": project.last_active.isoformat(),
+                            "prompt": project.prompt[:100] + "..." if len(project.prompt) > 100 else project.prompt,
+                            "is_active": True,
+                            "source": "local"
+                        })
                 else:
                     # Inactive project - read metadata from disk
                     try:
@@ -2875,10 +3174,20 @@ class FileRenameRequest(BaseModel):
     new_name: str
 
 @app.get("/files/{project_id}/{file_path:path}/content")
-async def get_file_content(project_id: str, file_path: str):
+async def get_file_content(
+    project_id: str,
+    file_path: str,
+    current_user: User = Depends(get_current_user)
+):
     """Get file content"""
     try:
         validated_project_id = validate_project_id(project_id)
+        project = project_manager.get_project(validated_project_id)
+        if project and project.user_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You don't have access to this project"
+            )
         content = file_manager.read_file(validated_project_id, file_path)
         if content is None:
             return JSONResponse(status_code=404, content={"error": "File not found"})
@@ -2887,13 +3196,22 @@ async def get_file_content(project_id: str, file_path: str):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 @app.get("/files/{project_id}/{file_path:path}")
-async def serve_file(project_id: str, file_path: str):
+async def serve_file(
+    project_id: str,
+    file_path: str,
+    current_user: User = Depends(get_current_user)
+):
     """Serve raw file (for images, etc.)"""
     try:
         validated_project_id = validate_project_id(project_id)
         project = project_manager.get_project(validated_project_id)
         if not project:
             return JSONResponse(status_code=404, content={"error": "Project not found"})
+        if project.user_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You don't have access to this project"
+            )
         
         full_path = os.path.join(project.directory, file_path)
         
@@ -2923,7 +3241,12 @@ async def serve_file(project_id: str, file_path: str):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 @app.put("/files/{project_id}/{file_path:path}")
-async def update_file(project_id: str, file_path: str, request: FileContentRequest):
+async def update_file(
+    project_id: str,
+    file_path: str,
+    request: FileContentRequest,
+    current_user: User = Depends(get_current_user)
+):
     """Update file - automatically generates icons and images if it's a screen file"""
     try:
         validated_project_id = validate_project_id(project_id)
@@ -2931,6 +3254,11 @@ async def update_file(project_id: str, file_path: str, request: FileContentReque
         
         if not project:
             return JSONResponse(status_code=404, content={"error": "Project not found"})
+        if project.user_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You don't have access to this project"
+            )
         
         success = file_manager.write_file(validated_project_id, file_path, request.content)
         if not success:
@@ -2954,7 +3282,11 @@ async def update_file(project_id: str, file_path: str, request: FileContentReque
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 @app.post("/files/{project_id}")
-async def create_file(project_id: str, request: FileCreateRequest):
+async def create_file(
+    project_id: str,
+    request: FileCreateRequest,
+    current_user: User = Depends(get_current_user)
+):
     """Create file/folder - automatically generates icons and images if it's a screen file"""
     try:
         validated_project_id = validate_project_id(project_id)
@@ -2962,6 +3294,11 @@ async def create_file(project_id: str, request: FileCreateRequest):
         
         if not project:
             return JSONResponse(status_code=404, content={"error": "Project not found"})
+        if project.user_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You don't have access to this project"
+            )
         
         if request.type == 'folder':
             success = file_manager.create_folder(validated_project_id, request.path)
@@ -2989,10 +3326,20 @@ async def create_file(project_id: str, request: FileCreateRequest):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 @app.delete("/files/{project_id}/{file_path:path}")
-async def delete_file(project_id: str, file_path: str):
+async def delete_file(
+    project_id: str,
+    file_path: str,
+    current_user: User = Depends(get_current_user)
+):
     """Delete file"""
     try:
         validated_project_id = validate_project_id(project_id)
+        project = project_manager.get_project(validated_project_id)
+        if project and project.user_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You don't have access to this project"
+            )
         success = file_manager.delete_file(validated_project_id, file_path)
         if not success:
             return JSONResponse(status_code=404, content={"error": "Not found"})
@@ -3001,10 +3348,21 @@ async def delete_file(project_id: str, file_path: str):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 @app.post("/files/{project_id}/{file_path:path}/rename")
-async def rename_file(project_id: str, file_path: str, request: FileRenameRequest):
+async def rename_file(
+    project_id: str,
+    file_path: str,
+    request: FileRenameRequest,
+    current_user: User = Depends(get_current_user)
+):
     """Rename file"""
     try:
         validated_project_id = validate_project_id(project_id)
+        project = project_manager.get_project(validated_project_id)
+        if project and project.user_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You don't have access to this project"
+            )
         success = file_manager.rename_file(validated_project_id, file_path, request.new_name)
         if not success:
             return JSONResponse(status_code=404, content={"error": "Not found"})
