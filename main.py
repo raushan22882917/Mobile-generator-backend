@@ -188,6 +188,7 @@ parallel_workflow = None
 cloud_logging_service = None
 shared_deps_manager = None
 project_builder = None
+auth_service = None  # Will be initialized in lifespan
 
 
 @asynccontextmanager
@@ -293,6 +294,7 @@ async def lifespan(app: FastAPI):
     # Initialize Authentication Service
     from services.auth_service import AuthService
     from middleware.jwt_auth import set_auth_service
+    global auth_service
     auth_service = AuthService(users_dir=os.path.join(settings.projects_base_dir, "users"))
     set_auth_service(auth_service)
     logger.info("Authentication service initialized")
@@ -565,6 +567,13 @@ async def signup(request: SignupRequest):
     Creates a new user account with email and password.
     Returns JWT token for immediate authentication.
     """
+    global auth_service
+    if not auth_service:
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"success": False, "message": "Authentication service not initialized"}
+        )
+    
     try:
         user = auth_service.register_user(
             email=request.email,
@@ -611,6 +620,7 @@ async def login(request: LoginRequest):
     
     Validates email and password, returns JWT token for API access.
     """
+    global auth_service
     if not auth_service:
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

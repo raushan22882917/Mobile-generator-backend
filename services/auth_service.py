@@ -13,7 +13,6 @@ import jwt
 from jwt.exceptions import InvalidTokenError
 
 from models.user import User
-from exceptions import AuthenticationError
 
 logger = logging.getLogger(__name__)
 
