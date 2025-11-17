@@ -751,6 +751,514 @@ Generate ONLY the complete file content, no explanations."""
                 
                 logger.info(f"✓ Template {template.name} applied successfully")
         
+        # Step 5.5: Add Supabase integration (Auth screens and setup)
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("🔐 SUPABASE AUTHENTICATION SETUP")
+        logger.info("=" * 80)
+        
+        # Create .env file with Supabase variables
+        env_content = """# Supabase Configuration
+# Get these values from your Supabase project dashboard: https://app.supabase.com
+# Go to Settings > API to find your URL and anon key
+
+EXPO_PUBLIC_SUPABASE_URL=your_supabase_project_url_here
+EXPO_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key_here
+
+# Example:
+# EXPO_PUBLIC_SUPABASE_URL=https://xxxxxxxxxxxxx.supabase.co
+# EXPO_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+"""
+        env_path = os.path.join(project.directory, ".env")
+        with open(env_path, 'w', encoding='utf-8') as f:
+            f.write(env_content)
+        logger.info("✓ Created .env file with Supabase configuration")
+        
+        # Create Supabase client setup file
+        supabase_client_code = """import 'react-native-url-polyfill/auto';
+import { createClient } from '@supabase/supabase-js';
+import Constants from 'expo-constants';
+
+// Get Supabase credentials from environment variables
+// These are set in app.config.js from .env file
+const supabaseUrl = Constants.expoConfig?.extra?.supabaseUrl || '';
+const supabaseAnonKey = Constants.expoConfig?.extra?.supabaseAnonKey || '';
+
+if (!supabaseUrl || !supabaseAnonKey) {
+  console.warn('⚠️ Supabase URL or Anon Key not found.');
+  console.warn('Please set EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY in your .env file');
+  console.warn('Then update app.json to load these values (see app.config.js.example)');
+}
+
+export const supabase = createClient(
+  supabaseUrl,
+  supabaseAnonKey,
+  {
+    auth: {
+      storage: require('@react-native-async-storage/async-storage').default,
+      autoRefreshToken: true,
+      persistSession: true,
+      detectSessionInUrl: false,
+    },
+  }
+);
+"""
+        supabase_client_path = os.path.join(project.directory, "lib", "supabase.ts")
+        os.makedirs(os.path.dirname(supabase_client_path), exist_ok=True)
+        with open(supabase_client_path, 'w', encoding='utf-8') as f:
+            f.write(supabase_client_code)
+        logger.info("✓ Created Supabase client setup (lib/supabase.ts)")
+        
+        # Update app.json to include Supabase config in extra
+        app_json_path = os.path.join(project.directory, "app.json")
+        if os.path.exists(app_json_path):
+            import json
+            with open(app_json_path, 'r', encoding='utf-8') as f:
+                app_json = json.load(f)
+            
+            if 'expo' not in app_json:
+                app_json = {'expo': app_json}
+            
+            if 'extra' not in app_json['expo']:
+                app_json['expo']['extra'] = {}
+            
+            # Add placeholder values - user will update these from .env file
+            app_json['expo']['extra']['supabaseUrl'] = ''
+            app_json['expo']['extra']['supabaseAnonKey'] = ''
+            
+            with open(app_json_path, 'w', encoding='utf-8') as f:
+                json.dump(app_json, f, indent=2)
+            logger.info("✓ Updated app.json with Supabase configuration placeholders")
+            logger.info("   ⚠️  Remember to update app.json 'extra' section with values from .env file")
+        
+        # Generate Login Screen
+        logger.info("")
+        logger.info("📝 [AUTH] Generating: Login Screen")
+        login_screen_code = """import React, { useState } from 'react';
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+} from 'react-native';
+import { supabase } from '../lib/supabase';
+import { useRouter } from 'expo-router';
+
+export default function LoginScreen() {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const router = useRouter();
+
+  const handleLogin = async () => {
+    if (!email || !password) {
+      Alert.alert('Error', 'Please fill in all fields');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (error) {
+        Alert.alert('Login Error', error.message);
+      } else {
+        Alert.alert('Success', 'Logged in successfully!');
+        router.replace('/(tabs)');
+      }
+    } catch (error: any) {
+      Alert.alert('Error', error.message || 'An unexpected error occurred');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    >
+      <ScrollView contentContainerStyle={styles.scrollContent}>
+        <View style={styles.content}>
+          <Text style={styles.title}>Welcome Back</Text>
+          <Text style={styles.subtitle}>Sign in to continue</Text>
+
+          <View style={styles.form}>
+            <Text style={styles.label}>Email</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="Enter your email"
+              placeholderTextColor="#999"
+              value={email}
+              onChangeText={setEmail}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoComplete="email"
+            />
+
+            <Text style={styles.label}>Password</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="Enter your password"
+              placeholderTextColor="#999"
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry
+              autoCapitalize="none"
+            />
+
+            <TouchableOpacity
+              style={[styles.button, loading && styles.buttonDisabled]}
+              onPress={handleLogin}
+              disabled={loading}
+            >
+              <Text style={styles.buttonText}>
+                {loading ? 'Signing in...' : 'Sign In'}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.linkButton}
+              onPress={() => router.push('/signup')}
+            >
+              <Text style={styles.linkText}>
+                Don't have an account? <Text style={styles.linkTextBold}>Sign Up</Text>
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#fff',
+  },
+  scrollContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    padding: 20,
+  },
+  content: {
+    width: '100%',
+    maxWidth: 400,
+    alignSelf: 'center',
+  },
+  title: {
+    fontSize: 32,
+    fontWeight: 'bold',
+    color: '#000',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  subtitle: {
+    fontSize: 16,
+    color: '#666',
+    marginBottom: 32,
+    textAlign: 'center',
+  },
+  form: {
+    width: '100%',
+  },
+  label: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#000',
+    marginBottom: 8,
+    marginTop: 16,
+  },
+  input: {
+    width: '100%',
+    height: 50,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    fontSize: 16,
+    backgroundColor: '#f9f9f9',
+  },
+  button: {
+    width: '100%',
+    height: 50,
+    backgroundColor: '#007AFF',
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 24,
+  },
+  buttonDisabled: {
+    opacity: 0.6,
+  },
+  buttonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  linkButton: {
+    marginTop: 16,
+    alignItems: 'center',
+  },
+  linkText: {
+    fontSize: 14,
+    color: '#666',
+  },
+  linkTextBold: {
+    fontWeight: '600',
+    color: '#007AFF',
+  },
+});
+"""
+        login_screen_path = os.path.join(project.directory, "app", "login.tsx")
+        with open(login_screen_path, 'w', encoding='utf-8') as f:
+            f.write(login_screen_code)
+        created_files.append("app/login.tsx")
+        logger.info("   ✓ Login screen created (app/login.tsx)")
+        
+        # Generate Signup Screen
+        logger.info("")
+        logger.info("📝 [AUTH] Generating: Signup Screen")
+        signup_screen_code = """import React, { useState } from 'react';
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+} from 'react-native';
+import { supabase } from '../lib/supabase';
+import { useRouter } from 'expo-router';
+
+export default function SignupScreen() {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const router = useRouter();
+
+  const handleSignup = async () => {
+    if (!email || !password || !confirmPassword) {
+      Alert.alert('Error', 'Please fill in all fields');
+      return;
+    }
+
+    if (password !== confirmPassword) {
+      Alert.alert('Error', 'Passwords do not match');
+      return;
+    }
+
+    if (password.length < 6) {
+      Alert.alert('Error', 'Password must be at least 6 characters');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+      });
+
+      if (error) {
+        Alert.alert('Signup Error', error.message);
+      } else {
+        Alert.alert(
+          'Success',
+          'Account created! Please check your email to verify your account.',
+          [
+            {
+              text: 'OK',
+              onPress: () => router.replace('/login'),
+            },
+          ]
+        );
+      }
+    } catch (error: any) {
+      Alert.alert('Error', error.message || 'An unexpected error occurred');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    >
+      <ScrollView contentContainerStyle={styles.scrollContent}>
+        <View style={styles.content}>
+          <Text style={styles.title}>Create Account</Text>
+          <Text style={styles.subtitle}>Sign up to get started</Text>
+
+          <View style={styles.form}>
+            <Text style={styles.label}>Email</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="Enter your email"
+              placeholderTextColor="#999"
+              value={email}
+              onChangeText={setEmail}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoComplete="email"
+            />
+
+            <Text style={styles.label}>Password</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="Enter your password (min 6 characters)"
+              placeholderTextColor="#999"
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry
+              autoCapitalize="none"
+            />
+
+            <Text style={styles.label}>Confirm Password</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="Confirm your password"
+              placeholderTextColor="#999"
+              value={confirmPassword}
+              onChangeText={setConfirmPassword}
+              secureTextEntry
+              autoCapitalize="none"
+            />
+
+            <TouchableOpacity
+              style={[styles.button, loading && styles.buttonDisabled]}
+              onPress={handleSignup}
+              disabled={loading}
+            >
+              <Text style={styles.buttonText}>
+                {loading ? 'Creating account...' : 'Sign Up'}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.linkButton}
+              onPress={() => router.push('/login')}
+            >
+              <Text style={styles.linkText}>
+                Already have an account? <Text style={styles.linkTextBold}>Sign In</Text>
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#fff',
+  },
+  scrollContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    padding: 20,
+  },
+  content: {
+    width: '100%',
+    maxWidth: 400,
+    alignSelf: 'center',
+  },
+  title: {
+    fontSize: 32,
+    fontWeight: 'bold',
+    color: '#000',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  subtitle: {
+    fontSize: 16,
+    color: '#666',
+    marginBottom: 32,
+    textAlign: 'center',
+  },
+  form: {
+    width: '100%',
+  },
+  label: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#000',
+    marginBottom: 8,
+    marginTop: 16,
+  },
+  input: {
+    width: '100%',
+    height: 50,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    fontSize: 16,
+    backgroundColor: '#f9f9f9',
+  },
+  button: {
+    width: '100%',
+    height: 50,
+    backgroundColor: '#007AFF',
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 24,
+  },
+  buttonDisabled: {
+    opacity: 0.6,
+  },
+  buttonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  linkButton: {
+    marginTop: 16,
+    alignItems: 'center',
+  },
+  linkText: {
+    fontSize: 14,
+    color: '#666',
+  },
+  linkTextBold: {
+    fontWeight: '600',
+    color: '#007AFF',
+  },
+});
+"""
+        signup_screen_path = os.path.join(project.directory, "app", "signup.tsx")
+        with open(signup_screen_path, 'w', encoding='utf-8') as f:
+            f.write(signup_screen_code)
+        created_files.append("app/signup.tsx")
+        logger.info("   ✓ Signup screen created (app/signup.tsx)")
+        
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("✅ SUPABASE AUTHENTICATION SETUP COMPLETE")
+        logger.info("=" * 80)
+        logger.info("📝 Next steps:")
+        logger.info("   1. Open .env file in your project")
+        logger.info("   2. Add your Supabase URL and Anon Key")
+        logger.info("   3. Get these from: https://app.supabase.com > Settings > API")
+        logger.info("=" * 80)
+        
         # Step 6: Setup preview (install deps, start server, create tunnel)
         logger.info("")
         logger.info("=" * 80)

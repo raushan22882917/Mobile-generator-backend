@@ -124,6 +124,10 @@ class SharedDependenciesManager:
             "axios": "^1.6.0",
             "expo-network": "~6.0.0",
             
+            # ===== SUPABASE (AUTHENTICATION & DATABASE) =====
+            "@supabase/supabase-js": "^2.39.0",
+            "react-native-url-polyfill": "^2.0.0",  # Required for Supabase
+            
             # ===== UX ENHANCERS & FEEDBACK =====
             "react-native-toast-message": "^2.2.0",  # Toast notifications
             "react-native-modal": "^13.0.1",  # Elegant modals
@@ -210,7 +214,10 @@ class SharedDependenciesManager:
             
             # Linting & Formatting
             "eslint": "^8.56.0",
-            "prettier": "^3.2.4"
+            "prettier": "^3.2.4",
+            
+            # Environment Variables
+            "dotenv": "^16.3.1"
         }
     
     async def ensure_global_modules_installed(self):
