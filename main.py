@@ -9,6 +9,7 @@ import re
 import asyncio
 import uuid
 import time
+import json
 from datetime import datetime
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, status, BackgroundTasks, Depends, WebSocket, WebSocketDisconnect
@@ -1330,7 +1331,7 @@ const styles = StyleSheet.create({
         logger.info(f"✓ Tunnel created: {preview_url}")
         
         tunnel_created = True
-        project_manager.update_preview_url(project.id, preview_url)
+        project_manager.update_preview_url(project.id, preview_url, port=project.port)
         
         # Step 7: Upload to Cloud Storage and clean up local files
         logger.info("")
@@ -1812,6 +1813,9 @@ async def list_projects():
                         "status": project.status.value,
                         "preview_url": project.preview_url,
                         "preview_urls": project.preview_urls,
+                        "tunnel_urls": [tunnel.to_dict() for tunnel in project.tunnel_urls],
+                        "latest_tunnel_url": project.get_latest_tunnel_url(),
+                        "active_tunnel_count": len(project.get_active_tunnel_urls()),
                         "created_at": project.created_at.isoformat(),
                         "last_active": project.last_active.isoformat(),
                         "prompt": project.prompt[:100] + "..." if len(project.prompt) > 100 else project.prompt,
@@ -2068,7 +2072,7 @@ async def activate_project(project_id: str):
                 timeout=30  # 30 second timeout for tunnel creation
             )
             
-            project_manager.update_preview_url(project.id, preview_url)
+            project_manager.update_preview_url(project.id, preview_url, port=project.port)
             logger.info(f"Tunnel created for project {project.id}: {preview_url}")
         except asyncio.TimeoutError:
             logger.error(f"Tunnel creation timed out for project {project.id}")
@@ -2165,7 +2169,10 @@ async def manual_activate_project(project_id: str, request: ManualActivateReques
         logger.info(f"Added project {validated_project_id} to active projects")
     
     # Update preview URL
-    project_manager.update_preview_url(validated_project_id, request.preview_url)
+    # Get project to get port info
+    project = project_manager.get_project(validated_project_id)
+    port = project.port if project else None
+    project_manager.update_preview_url(validated_project_id, request.preview_url, port=port)
     
     # Mark as ready
     project_manager.update_project_status(

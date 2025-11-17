@@ -4,7 +4,7 @@ Data models for projects, code generation, and system metrics.
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 
 class ProjectStatus(Enum):
@@ -16,6 +16,24 @@ class ProjectStatus(Enum):
     CREATING_TUNNEL = "creating_tunnel"
     READY = "ready"
     ERROR = "error"
+
+
+@dataclass
+class TunnelURL:
+    """Represents a tunnel URL with metadata"""
+    url: str
+    created_at: datetime
+    is_active: bool = True
+    port: Optional[int] = None
+    
+    def to_dict(self) -> dict:
+        """Serialize to dictionary"""
+        return {
+            "url": self.url,
+            "created_at": self.created_at.isoformat(),
+            "is_active": self.is_active,
+            "port": self.port
+        }
 
 
 @dataclass
@@ -31,7 +49,8 @@ class Project:
     error_message: Optional[str] = None
     created_at: datetime = field(default_factory=datetime.now)
     last_active: datetime = field(default_factory=datetime.now)
-    preview_urls: List[str] = field(default_factory=list)  # Store all preview URLs
+    preview_urls: List[str] = field(default_factory=list)  # Store all preview URLs (legacy)
+    tunnel_urls: List[TunnelURL] = field(default_factory=list)  # Store all tunnel URLs with metadata
     
     def to_dict(self) -> dict:
         """Serialize project to dictionary."""
@@ -47,7 +66,33 @@ class Project:
             "created_at": self.created_at.isoformat(),
             "last_active": self.last_active.isoformat(),
             "preview_urls": self.preview_urls,
+            "tunnel_urls": [tunnel.to_dict() for tunnel in self.tunnel_urls],
         }
+    
+    def add_tunnel_url(self, url: str, port: Optional[int] = None) -> None:
+        """Add a new tunnel URL with timestamp"""
+        tunnel = TunnelURL(
+            url=url,
+            created_at=datetime.now(),
+            is_active=True,
+            port=port
+        )
+        self.tunnel_urls.append(tunnel)
+        # Also update preview_url and preview_urls for backward compatibility
+        self.preview_url = url
+        if url not in self.preview_urls:
+            self.preview_urls.append(url)
+        self.last_active = datetime.now()
+    
+    def get_active_tunnel_urls(self) -> List[TunnelURL]:
+        """Get all active tunnel URLs"""
+        return [tunnel for tunnel in self.tunnel_urls if tunnel.is_active]
+    
+    def get_latest_tunnel_url(self) -> Optional[str]:
+        """Get the most recent tunnel URL"""
+        if self.tunnel_urls:
+            return self.tunnel_urls[-1].url
+        return self.preview_url
 
 
 @dataclass

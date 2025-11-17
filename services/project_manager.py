@@ -478,22 +478,65 @@ web-build/
                 project.error_message = error_message
             logger.info(f"Project {project_id} status updated to {status.value}")
     
-    def update_preview_url(self, project_id: str, preview_url: str) -> None:
+    def update_preview_url(self, project_id: str, preview_url: str, port: Optional[int] = None) -> None:
         """
-        Update project preview URL
+        Update project preview URL and store in tunnel URLs list with metadata
         
         Args:
             project_id: Project identifier
             preview_url: Public preview URL
+            port: Optional port number for the tunnel
         """
         project = self.active_projects.get(project_id)
         if project:
-            project.preview_url = preview_url
-            # Store in preview_urls list for history
-            if preview_url and preview_url not in project.preview_urls:
-                project.preview_urls.append(preview_url)
-            project.last_active = datetime.now()
-            logger.info(f"Project {project_id} preview URL set to {preview_url}")
+            # Use the new method to add tunnel URL with metadata
+            project.add_tunnel_url(preview_url, port=port)
+            logger.info(f"Project {project_id} tunnel URL added: {preview_url} (port: {port})")
+            # Persist project data to file
+            self._persist_project(project)
+    
+    def _persist_project(self, project: Project) -> None:
+        """
+        Persist project data to JSON file for long-term storage
+        
+        Args:
+            project: Project instance to persist
+        """
+        try:
+            import json
+            projects_dir = self.base_dir / "metadata"
+            projects_dir.mkdir(exist_ok=True)
+            
+            project_file = projects_dir / f"{project.id}.json"
+            with open(project_file, 'w', encoding='utf-8') as f:
+                json.dump(project.to_dict(), f, indent=2, default=str)
+            
+            logger.debug(f"Persisted project {project.id} to {project_file}")
+        except Exception as e:
+            logger.warning(f"Failed to persist project {project.id}: {e}")
+    
+    def load_project_metadata(self, project_id: str) -> Optional[dict]:
+        """
+        Load project metadata from persisted file
+        
+        Args:
+            project_id: Project identifier
+            
+        Returns:
+            Project metadata dictionary or None if not found
+        """
+        try:
+            import json
+            projects_dir = self.base_dir / "metadata"
+            project_file = projects_dir / f"{project_id}.json"
+            
+            if project_file.exists():
+                with open(project_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+        except Exception as e:
+            logger.warning(f"Failed to load project metadata {project_id}: {e}")
+        
+        return None
     
     def cleanup_project(self, project_id: str) -> None:
         """
