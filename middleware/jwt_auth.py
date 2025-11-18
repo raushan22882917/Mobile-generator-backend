@@ -1,5 +1,5 @@
 """
-JWT Authentication Middleware
+Firebase Authentication Middleware
 """
 import logging
 from fastapi import Header, HTTPException, status, Depends
@@ -24,13 +24,13 @@ async def get_current_user(
     authorization: Optional[str] = Header(None)
 ) -> User:
     """
-    Get current authenticated user from JWT token
+    Get current authenticated user from Firebase ID token
     
     This dependency can be added to any endpoint that requires authentication.
-    It extracts the JWT token from the Authorization header and validates it.
+    It extracts the Firebase ID token from the Authorization header and validates it.
     
     Args:
-        authorization: Authorization header (format: "Bearer <token>")
+        authorization: Authorization header (format: "Bearer <firebase_id_token>")
         
     Returns:
         Authenticated User instance

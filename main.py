@@ -291,13 +291,13 @@ async def lifespan(app: FastAPI):
     from services.project_builder import ProjectBuilder
     project_builder = ProjectBuilder(shared_deps_manager=shared_deps_manager)
     
-    # Initialize Authentication Service
+    # Initialize Authentication Service (Firebase)
     from services.auth_service import AuthService
     from middleware.jwt_auth import set_auth_service
-    global auth_service
-    auth_service = AuthService(users_dir=os.path.join(settings.projects_base_dir, "users"))
+    firebase_creds_path = settings.firebase_credentials_path if settings.firebase_credentials_path else None
+    auth_service = AuthService(firebase_credentials_path=firebase_creds_path)
     set_auth_service(auth_service)
-    logger.info("Authentication service initialized")
+    logger.info("Firebase authentication service initialized")
     
     logger.info("All services initialized successfully")
     
@@ -528,17 +528,9 @@ class SupabaseTestResponse(BaseModel):
     project_name: Optional[str] = None
 
 
-class SignupRequest(BaseModel):
-    """Request model for user signup"""
-    email: str = Field(..., min_length=5, description="User email address")
-    password: str = Field(..., min_length=6, description="User password (min 6 characters)")
-    name: Optional[str] = Field(default=None, description="Optional user name")
-
-
-class LoginRequest(BaseModel):
-    """Request model for user login"""
-    email: str = Field(..., description="User email address")
-    password: str = Field(..., description="User password")
+class VerifyTokenRequest(BaseModel):
+    """Request model for Firebase token verification"""
+    id_token: str = Field(..., description="Firebase ID token to verify")
 
 
 class AuthResponse(BaseModel):
@@ -559,66 +551,14 @@ class UserResponse(BaseModel):
 
 
 # Authentication Endpoints
-@app.post("/auth/signup", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
-async def signup(request: SignupRequest):
+@app.post("/auth/verify", response_model=AuthResponse)
+async def verify_token(request: VerifyTokenRequest):
     """
-    Register a new user account
+    Verify Firebase ID token
     
-    Creates a new user account with email and password.
-    Returns JWT token for immediate authentication.
-    """
-    global auth_service
-    if not auth_service:
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={"success": False, "message": "Authentication service not initialized"}
-        )
-    
-    try:
-        user = auth_service.register_user(
-            email=request.email,
-            password=request.password,
-            name=request.name
-        )
-        
-        # Generate JWT token
-        token = auth_service.generate_token(user)
-        
-        logger.info(f"New user registered: {user.email}")
-        
-        return AuthResponse(
-            success=True,
-            message="User registered successfully",
-            token=token,
-            user=user.to_dict(include_password=False)
-        )
-        
-    except ValueError as e:
-        logger.warning(f"Signup failed: {e}")
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content={
-                "success": False,
-                "message": str(e)
-            }
-        )
-    except Exception as e:
-        logger.error(f"Signup error: {e}", exc_info=True)
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={
-                "success": False,
-                "message": "Failed to create user account"
-            }
-        )
-
-
-@app.post("/auth/login", response_model=AuthResponse)
-async def login(request: LoginRequest):
-    """
-    Authenticate user and return JWT token
-    
-    Validates email and password, returns JWT token for API access.
+    Validates a Firebase ID token and returns user information.
+    This endpoint is used after the client authenticates with Firebase.
+    The client should send the Firebase ID token obtained from Firebase Auth.
     """
     global auth_service
     if not auth_service:
@@ -628,39 +568,34 @@ async def login(request: LoginRequest):
         )
     
     try:
-        user = auth_service.authenticate_user(
-            email=request.email,
-            password=request.password
-        )
+        # Verify the Firebase ID token
+        user = auth_service.verify_token(request.id_token)
         
         if not user:
             return JSONResponse(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 content={
                     "success": False,
-                    "message": "Invalid email or password"
+                    "message": "Invalid or expired Firebase ID token"
                 }
             )
         
-        # Generate JWT token
-        token = auth_service.generate_token(user)
-        
-        logger.info(f"User logged in: {user.email}")
+        logger.info(f"Firebase token verified for user: {user.email}")
         
         return AuthResponse(
             success=True,
-            message="Login successful",
-            token=token,
+            message="Token verified successfully",
+            token=request.id_token,  # Return the same Firebase ID token
             user=user.to_dict(include_password=False)
         )
         
     except Exception as e:
-        logger.error(f"Login error: {e}", exc_info=True)
+        logger.error(f"Token verification error: {e}", exc_info=True)
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={
                 "success": False,
-                "message": "Login failed"
+                "message": "Token verification failed"
             }
         )
 

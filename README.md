@@ -27,11 +27,17 @@ A FastAPI backend service for generating and managing React Native Expo mobile a
    pip install -r requirements.txt
    ```
 
-3. Create a `.env` file in the root directory with the following variables:
+3. Create a `.env` file in the root directory. You can copy `.env.example` as a template:
+   ```bash
+   cp .env.example .env
+   ```
+   
+   Then edit `.env` and add your credentials:
    ```env
    OPENAI_API_KEY=your_openai_api_key
    NGROK_AUTH_TOKEN=your_ngrok_authtoken
    GEMINI_API_KEY=your_gemini_api_key (optional)
+   FIREBASE_CREDENTIALS_PATH=path/to/firebase-credentials.json
    ```
 
 4. Start the server:
@@ -40,6 +46,22 @@ A FastAPI backend service for generating and managing React Native Expo mobile a
    ```
 
 ## Configuration
+
+### Firebase Authentication Setup
+
+To use Firebase authentication:
+
+1. Go to [Firebase Console](https://console.firebase.google.com/)
+2. Select your project (or create a new one)
+3. Go to Project Settings → Service Accounts
+4. Click "Generate new private key" to download the credentials JSON file
+5. Save the file securely (e.g., `firebase-credentials.json`)
+6. Add the path to your `.env` file:
+   ```env
+   FIREBASE_CREDENTIALS_PATH=path/to/firebase-credentials.json
+   ```
+   
+   Alternatively, you can use the `GOOGLE_APPLICATION_CREDENTIALS` environment variable.
 
 ### Ngrok Setup
 

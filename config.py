@@ -33,6 +33,12 @@ class Settings(BaseSettings):
         description="Path to Google Cloud credentials JSON file (optional - uses environment variable or default credentials)"
     )
     
+    # Firebase Authentication
+    firebase_credentials_path: str = Field(
+        default="",
+        description="Path to Firebase Admin SDK credentials JSON file (required for Firebase authentication)"
+    )
+    
     # Application Settings
     max_concurrent_projects: int = 10
     project_timeout_minutes: int = 30

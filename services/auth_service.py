@@ -1,238 +1,212 @@
 """
-Authentication Service
-Handles user authentication, JWT token generation, and user management
+Firebase Authentication Service
+Handles user authentication using Firebase Admin SDK
 """
 import os
-import json
-import uuid
 import logging
-from datetime import datetime, timedelta
-from pathlib import Path
-from typing import Optional, Dict
-import jwt
-from jwt.exceptions import InvalidTokenError
+from typing import Optional
+from datetime import datetime
+
+import firebase_admin
+from firebase_admin import credentials, auth
+from firebase_admin.exceptions import FirebaseError
 
 from models.user import User
 
 logger = logging.getLogger(__name__)
 
-# JWT Secret Key (should be in environment variable in production)
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production")
-JWT_ALGORITHM = "HS256"
-JWT_EXPIRATION_HOURS = 24 * 7  # 7 days
-
 
 class AuthService:
-    """Service for user authentication and JWT token management"""
+    """Service for Firebase user authentication"""
     
-    def __init__(self, users_dir: str = "/tmp/users"):
+    def __init__(self, firebase_credentials_path: Optional[str] = None):
         """
-        Initialize AuthService
+        Initialize Firebase AuthService
         
         Args:
-            users_dir: Directory to store user data
+            firebase_credentials_path: Path to Firebase Admin SDK credentials JSON file
         """
-        self.users_dir = Path(users_dir)
-        self.users_dir.mkdir(parents=True, exist_ok=True)
-        self.users_file = self.users_dir / "users.json"
-        self.users: Dict[str, User] = {}
-        self._load_users()
-        logger.info(f"AuthService initialized with {len(self.users)} users")
+        self.firebase_app = None
+        self._initialize_firebase(firebase_credentials_path)
+        logger.info("Firebase AuthService initialized")
     
-    def _load_users(self) -> None:
-        """Load users from JSON file"""
-        if self.users_file.exists():
-            try:
-                with open(self.users_file, 'r', encoding='utf-8') as f:
-                    users_data = json.load(f)
-                    for user_data in users_data:
-                        user = User(
-                            id=user_data['id'],
-                            email=user_data['email'],
-                            password_hash=user_data['password_hash'],
-                            name=user_data.get('name'),
-                            created_at=datetime.fromisoformat(user_data['created_at']),
-                            last_login=datetime.fromisoformat(user_data['last_login']) if user_data.get('last_login') else None,
-                            is_active=user_data.get('is_active', True)
-                        )
-                        self.users[user.id] = user
-                logger.info(f"Loaded {len(self.users)} users from {self.users_file}")
-            except Exception as e:
-                logger.error(f"Failed to load users: {e}")
-                self.users = {}
-        else:
-            logger.info("No users file found, starting with empty user database")
-    
-    def _save_users(self) -> None:
-        """Save users to JSON file"""
+    def _initialize_firebase(self, credentials_path: Optional[str] = None) -> None:
+        """
+        Initialize Firebase Admin SDK
+        
+        Args:
+            credentials_path: Path to Firebase credentials JSON file
+        """
         try:
-            users_data = [user.to_dict(include_password=True) for user in self.users.values()]
-            with open(self.users_file, 'w', encoding='utf-8') as f:
-                json.dump(users_data, f, indent=2, default=str)
-            logger.debug(f"Saved {len(self.users)} users to {self.users_file}")
+            # Check if Firebase is already initialized
+            try:
+                self.firebase_app = firebase_admin.get_app()
+                logger.info("Using existing Firebase app instance")
+                return
+            except ValueError:
+                # Firebase not initialized yet, proceed with initialization
+                pass
+            
+            # Initialize Firebase Admin SDK
+            # Priority: 1) credentials_path parameter, 2) FIREBASE_CREDENTIALS_PATH env var, 3) GOOGLE_APPLICATION_CREDENTIALS env var
+            cred_path = None
+            if credentials_path and os.path.exists(credentials_path):
+                cred_path = credentials_path
+            elif os.getenv("FIREBASE_CREDENTIALS_PATH") and os.path.exists(os.getenv("FIREBASE_CREDENTIALS_PATH")):
+                cred_path = os.getenv("FIREBASE_CREDENTIALS_PATH")
+            elif os.getenv("GOOGLE_APPLICATION_CREDENTIALS") and os.path.exists(os.getenv("GOOGLE_APPLICATION_CREDENTIALS")):
+                cred_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+            
+            if cred_path:
+                cred = credentials.Certificate(cred_path)
+                self.firebase_app = firebase_admin.initialize_app(cred)
+                logger.info(f"Firebase initialized with credentials from {cred_path}")
+            else:
+                # Try to use default credentials (for Google Cloud environments)
+                try:
+                    self.firebase_app = firebase_admin.initialize_app()
+                    logger.info("Firebase initialized with default credentials")
+                except Exception as e:
+                    logger.warning(f"Could not initialize Firebase with default credentials: {e}")
+                    logger.warning("Firebase authentication will not be available")
+                    self.firebase_app = None
+                    
         except Exception as e:
-            logger.error(f"Failed to save users: {e}")
+            logger.error(f"Failed to initialize Firebase: {e}")
+            self.firebase_app = None
     
-    def register_user(self, email: str, password: str, name: Optional[str] = None) -> User:
+    def verify_token(self, id_token: str) -> Optional[User]:
         """
-        Register a new user
+        Verify Firebase ID token and return User
         
         Args:
-            email: User email
-            password: Plain text password (will be hashed)
-            name: Optional user name
-            
-        Returns:
-            Created User instance
-            
-        Raises:
-            ValueError: If email already exists
-        """
-        # Check if user already exists
-        for user in self.users.values():
-            if user.email.lower() == email.lower():
-                raise ValueError("Email already registered")
-        
-        # Validate password
-        if len(password) < 6:
-            raise ValueError("Password must be at least 6 characters")
-        
-        # Create new user
-        user_id = str(uuid.uuid4())
-        password_hash = User.hash_password(password)
-        
-        user = User(
-            id=user_id,
-            email=email.lower(),
-            password_hash=password_hash,
-            name=name,
-            created_at=datetime.now(),
-            is_active=True
-        )
-        
-        self.users[user.id] = user
-        self._save_users()
-        
-        logger.info(f"New user registered: {email} (ID: {user_id})")
-        return user
-    
-    def authenticate_user(self, email: str, password: str) -> Optional[User]:
-        """
-        Authenticate a user with email and password
-        
-        Args:
-            email: User email
-            password: Plain text password
-            
-        Returns:
-            User instance if authentication successful, None otherwise
-        """
-        # Find user by email
-        user = None
-        for u in self.users.values():
-            if u.email.lower() == email.lower():
-                user = u
-                break
-        
-        if not user:
-            logger.warning(f"Authentication failed: User not found - {email}")
-            return None
-        
-        if not user.is_active:
-            logger.warning(f"Authentication failed: User inactive - {email}")
-            return None
-        
-        # Verify password
-        if not User.verify_password(password, user.password_hash):
-            logger.warning(f"Authentication failed: Invalid password - {email}")
-            return None
-        
-        # Update last login
-        user.last_login = datetime.now()
-        self._save_users()
-        
-        logger.info(f"User authenticated: {email}")
-        return user
-    
-    def get_user_by_id(self, user_id: str) -> Optional[User]:
-        """Get user by ID"""
-        return self.users.get(user_id)
-    
-    def get_user_by_email(self, email: str) -> Optional[User]:
-        """Get user by email"""
-        for user in self.users.values():
-            if user.email.lower() == email.lower():
-                return user
-        return None
-    
-    def generate_token(self, user: User) -> str:
-        """
-        Generate JWT token for user
-        
-        Args:
-            user: User instance
-            
-        Returns:
-            JWT token string
-        """
-        payload = {
-            "user_id": user.id,
-            "email": user.email,
-            "exp": datetime.utcnow() + timedelta(hours=JWT_EXPIRATION_HOURS),
-            "iat": datetime.utcnow()
-        }
-        
-        token = jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
-        return token
-    
-    def verify_token(self, token: str) -> Optional[User]:
-        """
-        Verify JWT token and return user
-        
-        Args:
-            token: JWT token string
+            id_token: Firebase ID token string
             
         Returns:
             User instance if token is valid, None otherwise
         """
-        try:
-            payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
-            user_id = payload.get("user_id")
-            
-            if not user_id:
-                return None
-            
-            user = self.get_user_by_id(user_id)
-            if user and user.is_active:
-                return user
-            
+        if not self.firebase_app:
+            logger.error("Firebase not initialized, cannot verify token")
             return None
+        
+        try:
+            # Verify the ID token
+            decoded_token = auth.verify_id_token(id_token)
             
-        except InvalidTokenError as e:
-            logger.warning(f"Invalid token: {e}")
+            # Extract user information from token
+            uid = decoded_token.get('uid')
+            email = decoded_token.get('email', '')
+            name = decoded_token.get('name') or decoded_token.get('display_name')
+            
+            # Get additional user info from Firebase Auth
+            try:
+                firebase_user = auth.get_user(uid)
+                if not name:
+                    name = firebase_user.display_name
+                if not email:
+                    email = firebase_user.email or ''
+            except FirebaseError as e:
+                logger.warning(f"Could not fetch user details from Firebase: {e}")
+            
+            # Create User instance from Firebase data
+            user = User(
+                id=uid,
+                email=email,
+                password_hash="",  # Firebase handles passwords, we don't store them
+                name=name,
+                created_at=datetime.fromtimestamp(decoded_token.get('iat', 0)) if decoded_token.get('iat') else datetime.now(),
+                last_login=datetime.now(),
+                is_active=True
+            )
+            
+            logger.debug(f"Token verified for user: {email} (UID: {uid})")
+            return user
+            
+        except auth.InvalidIdTokenError as e:
+            logger.warning(f"Invalid Firebase ID token: {e}")
+            return None
+        except auth.ExpiredIdTokenError as e:
+            logger.warning(f"Expired Firebase ID token: {e}")
+            return None
+        except FirebaseError as e:
+            logger.error(f"Firebase error verifying token: {e}")
             return None
         except Exception as e:
-            logger.error(f"Token verification error: {e}")
+            logger.error(f"Unexpected error verifying token: {e}")
             return None
     
-    def update_user(self, user_id: str, name: Optional[str] = None) -> Optional[User]:
+    def get_user_by_id(self, user_id: str) -> Optional[User]:
         """
-        Update user information
+        Get user by Firebase UID
         
         Args:
-            user_id: User ID
-            name: Optional new name
+            user_id: Firebase user UID
             
         Returns:
-            Updated User instance or None if not found
+            User instance if found, None otherwise
         """
-        user = self.get_user_by_id(user_id)
-        if not user:
+        if not self.firebase_app:
             return None
         
-        if name is not None:
-            user.name = name
+        try:
+            firebase_user = auth.get_user(user_id)
+            
+            user = User(
+                id=firebase_user.uid,
+                email=firebase_user.email or '',
+                password_hash="",  # Firebase handles passwords
+                name=firebase_user.display_name,
+                created_at=datetime.fromtimestamp(firebase_user.user_metadata.creation_timestamp / 1000) if firebase_user.user_metadata.creation_timestamp else datetime.now(),
+                last_login=datetime.fromtimestamp(firebase_user.user_metadata.last_sign_in_timestamp / 1000) if firebase_user.user_metadata.last_sign_in_timestamp else None,
+                is_active=not firebase_user.disabled
+            )
+            
+            return user
+            
+        except auth.UserNotFoundError:
+            logger.warning(f"User not found: {user_id}")
+            return None
+        except FirebaseError as e:
+            logger.error(f"Firebase error getting user: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error getting user: {e}")
+            return None
+    
+    def get_user_by_email(self, email: str) -> Optional[User]:
+        """
+        Get user by email
         
-        self._save_users()
-        return user
-
+        Args:
+            email: User email address
+            
+        Returns:
+            User instance if found, None otherwise
+        """
+        if not self.firebase_app:
+            return None
+        
+        try:
+            firebase_user = auth.get_user_by_email(email)
+            
+            user = User(
+                id=firebase_user.uid,
+                email=firebase_user.email or '',
+                password_hash="",  # Firebase handles passwords
+                name=firebase_user.display_name,
+                created_at=datetime.fromtimestamp(firebase_user.user_metadata.creation_timestamp / 1000) if firebase_user.user_metadata.creation_timestamp else datetime.now(),
+                last_login=datetime.fromtimestamp(firebase_user.user_metadata.last_sign_in_timestamp / 1000) if firebase_user.user_metadata.last_sign_in_timestamp else None,
+                is_active=not firebase_user.disabled
+            )
+            
+            return user
+            
+        except auth.UserNotFoundError:
+            logger.warning(f"User not found: {email}")
+            return None
+        except FirebaseError as e:
+            logger.error(f"Firebase error getting user by email: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error getting user by email: {e}")
+            return None

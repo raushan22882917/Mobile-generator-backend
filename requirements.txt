@@ -23,6 +23,9 @@ PyJWT==2.8.0
 google-cloud-storage==2.14.0
 google-cloud-logging==3.8.0
 
+# Firebase Authentication
+firebase-admin>=6.4.0
+
 # Testing
 pytest==7.4.4
 pytest-asyncio==0.23.3
