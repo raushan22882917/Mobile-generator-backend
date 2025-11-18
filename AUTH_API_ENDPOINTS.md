@@ -83,7 +83,93 @@ or
 
 ---
 
-### 2. POST `/auth/verify`
+### 2. POST `/auth/login`
+
+**Purpose:** Check if user exists and is active (for login flow)
+
+**Description:**
+- Checks if user exists in Firebase Auth
+- Verifies user account is active
+- **Important:** Firebase requires password verification to happen client-side for security
+- This endpoint confirms user exists, but actual authentication must use Firebase Auth SDK on frontend
+
+**Request:**
+- **Method:** `POST`
+- **URL:** `/auth/login`
+- **Headers:**
+  ```
+  Content-Type: application/json
+  ```
+- **Body:**
+  ```json
+  {
+    "email": "user@example.com",
+    "password": "password123"
+  }
+  ```
+
+**Response (Success - 200):**
+```json
+{
+  "success": true,
+  "message": "User found. Please use Firebase Auth SDK on frontend to sign in and get ID token, then call /auth/verify",
+  "token": null,
+  "user": {
+    "id": "firebase-uid",
+    "email": "user@example.com",
+    "name": "User Name",
+    "created_at": "2024-01-01T00:00:00",
+    "last_login": "2024-01-01T00:00:00",
+    "is_active": true
+  }
+}
+```
+
+**Response (Error - 401 Unauthorized):**
+```json
+{
+  "success": false,
+  "message": "Invalid email or password"
+}
+```
+or
+```json
+{
+  "success": false,
+  "message": "User account is disabled"
+}
+```
+
+**Response (Error - 500 Internal Server Error):**
+```json
+{
+  "success": false,
+  "message": "Authentication service not initialized"
+}
+```
+or
+```json
+{
+  "success": false,
+  "message": "Login failed"
+}
+```
+
+**Usage:**
+1. Frontend sends email and password to this endpoint
+2. Backend checks if user exists and is active
+3. **Frontend must then use Firebase Auth SDK** to actually authenticate:
+   ```javascript
+   const { user } = await signInWithEmailAndPassword(auth, email, password);
+   const idToken = await user.getIdToken();
+   ```
+4. Call `/auth/verify` with the ID token to complete authentication
+
+**Note:** This endpoint only verifies user existence. Actual password verification and token generation must happen on the frontend using Firebase Auth SDK for security reasons.
+
+---
+
+### 3. POST `/auth/verify`
 
 **Purpose:** Verify Firebase ID token and get user information
 
@@ -155,7 +241,7 @@ or
 
 ---
 
-### 3. GET `/auth/me`
+### 4. GET `/auth/me`
 
 **Purpose:** Get current authenticated user information
 
@@ -230,6 +316,14 @@ or
 }
 ```
 
+### LoginRequest
+```typescript
+{
+  email: string     // User email address
+  password: string  // User password
+}
+```
+
 ### VerifyTokenRequest
 ```typescript
 {
@@ -296,6 +390,26 @@ or
 2. **Frontend: User Signs In**
    - User signs in using Firebase Auth SDK: `signInWithEmailAndPassword()`
    - Frontend gets Firebase ID token: `auth.currentUser.getIdToken()`
+
+3. **Frontend: Verify Token with Backend**
+   - Call `POST /auth/verify` with the Firebase ID token
+   - Backend verifies token and returns user info
+   - Frontend stores user info in app state/context
+
+4. **Frontend: Make Authenticated Requests**
+   - Include Firebase ID token in `Authorization: Bearer <token>` header
+   - Use for all protected endpoints
+
+### Option 3: Backend Login Check (Optional)
+
+1. **Backend: Check User Exists**
+   - Call `POST /auth/login` with email and password
+   - Backend verifies user exists and is active
+   - Returns user information (no token yet)
+
+2. **Frontend: Authenticate with Firebase**
+   - Use Firebase Auth SDK: `signInWithEmailAndPassword(email, password)`
+   - Get Firebase ID token: `auth.currentUser.getIdToken()`
 
 3. **Frontend: Verify Token with Backend**
    - Call `POST /auth/verify` with the Firebase ID token

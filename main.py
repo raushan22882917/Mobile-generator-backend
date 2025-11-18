@@ -535,6 +535,12 @@ class SignupRequest(BaseModel):
     name: Optional[str] = Field(default=None, description="Optional user display name")
 
 
+class LoginRequest(BaseModel):
+    """Request model for user login"""
+    email: str = Field(..., description="User email address")
+    password: str = Field(..., description="User password")
+
+
 class VerifyTokenRequest(BaseModel):
     """Request model for Firebase token verification"""
     id_token: str = Field(..., description="Firebase ID token to verify")
@@ -609,6 +615,79 @@ async def signup(request: SignupRequest):
             content={
                 "success": False,
                 "message": "Failed to create user account"
+            }
+        )
+
+
+@app.post("/auth/login", response_model=AuthResponse)
+async def login(request: LoginRequest):
+    """
+    User login endpoint
+    
+    Note: Firebase requires password verification to happen on the client-side for security.
+    This endpoint checks if the user exists and provides guidance.
+    
+    For actual authentication:
+    1. Use Firebase Auth SDK on frontend: signInWithEmailAndPassword()
+    2. Get Firebase ID token: auth.currentUser.getIdToken()
+    3. Call /auth/verify with the token to complete authentication
+    """
+    global auth_service
+    if not auth_service:
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"success": False, "message": "Authentication service not initialized"}
+        )
+    
+    try:
+        # Check if user exists in Firebase
+        user = auth_service.get_user_by_email(request.email)
+        
+        if not user:
+            return JSONResponse(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content={
+                    "success": False,
+                    "message": "Invalid email or password"
+                }
+            )
+        
+        if not user.is_active:
+            return JSONResponse(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content={
+                    "success": False,
+                    "message": "User account is disabled"
+                }
+            )
+        
+        # Note: Firebase Admin SDK cannot verify passwords directly (security feature)
+        # Password verification must happen client-side using Firebase Auth SDK
+        # This endpoint confirms user exists and is active
+        
+        logger.info(f"Login attempt for user: {user.email} (user exists and is active)")
+        
+        return AuthResponse(
+            success=True,
+            message="User found. Please use Firebase Auth SDK on frontend to sign in and get ID token, then call /auth/verify",
+            token=None,  # Token must be obtained from Firebase Auth SDK on frontend
+            user={
+                "id": user.id,
+                "email": user.email,
+                "name": user.name,
+                "created_at": user.created_at.isoformat(),
+                "last_login": user.last_login.isoformat() if user.last_login else None,
+                "is_active": user.is_active
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"Login error: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "success": False,
+                "message": "Login failed"
             }
         )
 
