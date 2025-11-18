@@ -39,7 +39,7 @@ class Settings(BaseSettings):
         description="Path to Firebase Admin SDK credentials JSON file (required for Firebase authentication)"
     )
     firebase_api_key: str = Field(
-        default="",
+        default="AIzaSyAN5hfhAjpLOy7I9nPZiZeolFtCUT7PQ3g",
         description="Firebase Web API Key (required for password authentication via REST API). Get from Firebase Console > Project Settings > General > Web API Key"
     )
     

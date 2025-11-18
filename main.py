@@ -2972,10 +2972,10 @@ async def chat_edit(request: ChatEditRequest, api_key: str = Depends(verify_api_
                 project_files = focused_files
                 logger.info(f"Focusing on mentioned files: {list(focused_files.keys())}")
         
-        # Build context for AI
+        # Build context for AI - limit file content to reduce token usage and speed up processing
         files_context = "\n\n".join([
-            f"// FILE: {path}\n{content[:3000]}" 
-            for path, content in list(project_files.items())[:15]  # Limit to first 15 files
+            f"// FILE: {path}\n{content[:2000]}"  # Reduced from 3000 to 2000 chars per file
+            for path, content in list(project_files.items())[:10]  # Reduced from 15 to 10 files
         ])
         
         # Create AI prompt for editing
@@ -3023,12 +3023,13 @@ Provide a brief summary of changes at the end starting with "SUMMARY:"
         
         # Call AI to generate edits
         logger.info("Generating file edits with AI")
+        # Increased timeout to 300 seconds (5 minutes) for complex edits
         response = await asyncio.wait_for(
             code_generator.client.responses.create(
                 model=code_generator.model,
                 input=edit_prompt
             ),
-            timeout=120
+            timeout=300  # 5 minutes timeout
         )
         
         ai_response = response.output_text
@@ -3131,8 +3132,11 @@ Provide a brief summary of changes at the end starting with "SUMMARY:"
         )
         
     except asyncio.TimeoutError:
-        logger.error("AI edit generation timed out")
-        raise AIGenerationError("Edit generation timed out", "Please try with a simpler request")
+        logger.error("AI edit generation timed out after 5 minutes")
+        raise AIGenerationError(
+            "Edit generation timed out after 5 minutes", 
+            "The request was too complex. Try breaking it into smaller edits or specify specific files with @filename"
+        )
     except Exception as e:
         logger.error(f"Error during chat edit: {str(e)}", exc_info=True)
         raise AIGenerationError(f"Failed to process edit: {str(e)}", "Please try again")
