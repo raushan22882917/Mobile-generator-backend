@@ -39,8 +39,34 @@ class Settings(BaseSettings):
         description="Path to Firebase Admin SDK credentials JSON file (required for Firebase authentication)"
     )
     firebase_api_key: str = Field(
-        default="AIzaSyAN5hfhAjpLOy7I9nPZiZeolFtCUT7PQ3g",
+        default="",
         description="Firebase Web API Key (required for password authentication via REST API). Get from Firebase Console > Project Settings > General > Web API Key"
+    )
+    
+    # Firebase Web App Configuration (for frontend)
+    firebase_auth_domain: str = Field(
+        default="",
+        description="Firebase Auth Domain (e.g., your-project.firebaseapp.com). Get from Firebase Console > Project Settings > General"
+    )
+    firebase_project_id: str = Field(
+        default="",
+        description="Firebase Project ID. Get from Firebase Console > Project Settings > General"
+    )
+    firebase_storage_bucket: str = Field(
+        default="",
+        description="Firebase Storage Bucket (e.g., your-project.firebasestorage.app). Get from Firebase Console > Project Settings > General"
+    )
+    firebase_messaging_sender_id: str = Field(
+        default="",
+        description="Firebase Messaging Sender ID. Get from Firebase Console > Project Settings > General"
+    )
+    firebase_app_id: str = Field(
+        default="",
+        description="Firebase App ID. Get from Firebase Console > Project Settings > General > Your apps"
+    )
+    firebase_measurement_id: str = Field(
+        default="",
+        description="Firebase Measurement ID (for Analytics, optional). Get from Firebase Console > Project Settings > General"
     )
     
     # Application Settings
