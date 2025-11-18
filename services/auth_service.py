@@ -210,3 +210,58 @@ class AuthService:
         except Exception as e:
             logger.error(f"Unexpected error getting user by email: {e}")
             return None
+    
+    def create_user(self, email: str, password: str, display_name: Optional[str] = None) -> Optional[User]:
+        """
+        Create a new user in Firebase Auth
+        
+        Args:
+            email: User email address
+            password: User password (will be hashed by Firebase)
+            display_name: Optional display name
+            
+        Returns:
+            User instance if created successfully, None otherwise
+        """
+        if not self.firebase_app:
+            logger.error("Firebase not initialized, cannot create user")
+            return None
+        
+        try:
+            # Create user in Firebase Auth
+            user_record = auth.create_user(
+                email=email,
+                password=password,
+                display_name=display_name,
+                email_verified=False  # User needs to verify email
+            )
+            
+            # Create User instance
+            user = User(
+                id=user_record.uid,
+                email=user_record.email or '',
+                password_hash="",  # Firebase handles passwords
+                name=user_record.display_name,
+                created_at=datetime.fromtimestamp(user_record.user_metadata.creation_timestamp / 1000) if user_record.user_metadata.creation_timestamp else datetime.now(),
+                last_login=None,
+                is_active=not user_record.disabled
+            )
+            
+            logger.info(f"User created in Firebase: {email} (UID: {user_record.uid})")
+            return user
+            
+        except auth.EmailAlreadyExistsError:
+            logger.warning(f"User already exists: {email}")
+            return None
+        except auth.InvalidEmailError:
+            logger.warning(f"Invalid email: {email}")
+            return None
+        except auth.WeakPasswordError:
+            logger.warning(f"Weak password for user: {email}")
+            return None
+        except FirebaseError as e:
+            logger.error(f"Firebase error creating user: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error creating user: {e}")
+            return None

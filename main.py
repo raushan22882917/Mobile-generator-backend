@@ -528,6 +528,13 @@ class SupabaseTestResponse(BaseModel):
     project_name: Optional[str] = None
 
 
+class SignupRequest(BaseModel):
+    """Request model for user signup"""
+    email: str = Field(..., min_length=5, description="User email address")
+    password: str = Field(..., min_length=6, description="User password (min 6 characters)")
+    name: Optional[str] = Field(default=None, description="Optional user display name")
+
+
 class VerifyTokenRequest(BaseModel):
     """Request model for Firebase token verification"""
     id_token: str = Field(..., description="Firebase ID token to verify")
@@ -551,6 +558,61 @@ class UserResponse(BaseModel):
 
 
 # Authentication Endpoints
+@app.post("/auth/signup", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
+async def signup(request: SignupRequest):
+    """
+    Register a new user account using Firebase
+    
+    Creates a new user account in Firebase Auth with email and password.
+    Returns user information on success.
+    
+    Note: With Firebase, users typically sign up on the frontend using Firebase Auth SDK.
+    This endpoint allows backend to create users if needed.
+    """
+    global auth_service
+    if not auth_service:
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"success": False, "message": "Authentication service not initialized"}
+        )
+    
+    try:
+        # Create user in Firebase
+        user = auth_service.create_user(
+            email=request.email,
+            password=request.password,
+            display_name=request.name
+        )
+        
+        if not user:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={
+                    "success": False,
+                    "message": "Failed to create user. Email may already exist or password is too weak."
+                }
+            )
+        
+        logger.info(f"New user registered: {user.email}")
+        
+        return AuthResponse(
+            success=True,
+            message="User registered successfully",
+            token=None,  # User needs to sign in to get token
+            user=user.to_dict(include_password=False)
+        )
+        
+    except Exception as e:
+        logger.error(f"Signup error: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "success": False,
+                "message": "Failed to create user account"
+            }
+        )
+
+
 @app.post("/auth/verify", response_model=AuthResponse)
 async def verify_token(request: VerifyTokenRequest):
     """

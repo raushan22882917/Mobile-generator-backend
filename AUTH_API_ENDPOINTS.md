@@ -8,7 +8,82 @@ The backend uses Firebase Authentication. All authentication endpoints work with
 
 ## Authentication Endpoints
 
-### 1. POST `/auth/verify`
+### 1. POST `/auth/signup`
+
+**Purpose:** Register a new user account using Firebase Admin SDK
+
+**Description:**
+- Creates a new user account in Firebase Auth
+- This endpoint allows the backend to create users programmatically
+- Note: Typically, users sign up on the frontend using Firebase Auth SDK, but this endpoint provides backend user creation capability
+
+**Request:**
+- **Method:** `POST`
+- **URL:** `/auth/signup`
+- **Headers:**
+  ```
+  Content-Type: application/json
+  ```
+- **Body:**
+  ```json
+  {
+    "email": "user@example.com",
+    "password": "password123",
+    "name": "User Name"  // Optional
+  }
+  ```
+
+**Response (Success - 201 Created):**
+```json
+{
+  "success": true,
+  "message": "User registered successfully",
+  "token": null,
+  "user": {
+    "id": "firebase-uid",
+    "email": "user@example.com",
+    "name": "User Name",
+    "created_at": "2024-01-01T00:00:00",
+    "last_login": null,
+    "is_active": true
+  }
+}
+```
+
+**Response (Error - 400 Bad Request):**
+```json
+{
+  "success": false,
+  "message": "Failed to create user. Email may already exist or password is too weak."
+}
+```
+
+**Response (Error - 500 Internal Server Error):**
+```json
+{
+  "success": false,
+  "message": "Authentication service not initialized"
+}
+```
+or
+```json
+{
+  "success": false,
+  "message": "Failed to create user account"
+}
+```
+
+**Usage:**
+1. Frontend sends email, password, and optional name to this endpoint
+2. Backend creates user in Firebase Auth
+3. User needs to sign in (using Firebase Auth SDK on frontend) to get ID token
+4. After sign in, use `/auth/verify` to verify token and get user info
+
+**Note:** After signup, the user should sign in using Firebase Auth SDK on the frontend to get an ID token, then call `/auth/verify` to complete authentication.
+
+---
+
+### 2. POST `/auth/verify`
 
 **Purpose:** Verify Firebase ID token and get user information
 
@@ -80,7 +155,7 @@ or
 
 ---
 
-### 2. GET `/auth/me`
+### 3. GET `/auth/me`
 
 **Purpose:** Get current authenticated user information
 
@@ -146,6 +221,15 @@ or
 
 ## Request/Response Models
 
+### SignupRequest
+```typescript
+{
+  email: string        // User email address (min 5 characters)
+  password: string     // User password (min 6 characters)
+  name?: string        // Optional user display name
+}
+```
+
 ### VerifyTokenRequest
 ```typescript
 {
@@ -185,7 +269,44 @@ or
 
 ## Authentication Flow
 
-### Complete Authentication Flow:
+### Option 1: Frontend Signup (Recommended)
+
+1. **Frontend: User Signs Up**
+   - User enters credentials on frontend
+   - Frontend uses Firebase Auth SDK: `createUserWithEmailAndPassword()`
+   - User is automatically signed in
+   - Frontend gets Firebase ID token: `auth.currentUser.getIdToken()`
+
+2. **Frontend: Verify Token with Backend**
+   - Call `POST /auth/verify` with the Firebase ID token
+   - Backend verifies token and returns user info
+   - Frontend stores user info in app state/context
+
+3. **Frontend: Make Authenticated Requests**
+   - Include Firebase ID token in `Authorization: Bearer <token>` header
+   - Use for all protected endpoints
+
+### Option 2: Backend Signup
+
+1. **Backend: Create User**
+   - Call `POST /auth/signup` with email, password, and optional name
+   - Backend creates user in Firebase Auth
+   - Returns user information (no token yet)
+
+2. **Frontend: User Signs In**
+   - User signs in using Firebase Auth SDK: `signInWithEmailAndPassword()`
+   - Frontend gets Firebase ID token: `auth.currentUser.getIdToken()`
+
+3. **Frontend: Verify Token with Backend**
+   - Call `POST /auth/verify` with the Firebase ID token
+   - Backend verifies token and returns user info
+   - Frontend stores user info in app state/context
+
+4. **Frontend: Make Authenticated Requests**
+   - Include Firebase ID token in `Authorization: Bearer <token>` header
+   - Use for all protected endpoints
+
+### Complete Authentication Flow (After Signup):
 
 1. **Frontend: User Signs In**
    - User enters credentials (email/password, Google, etc.)
