@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Dict, Optional, Set
 import logging
 
-from models.project import Project, ProjectStatus, GeneratedCode
+from models.project import Project, ProjectStatus, GeneratedCode, BuildStep, BuildStepStatus
 from services.port_manager import PortManager
 
 logger = logging.getLogger(__name__)
@@ -97,6 +97,45 @@ class ProjectManager:
             # We just reserve the path here
             logger.info(f"Reserved project directory path: {project_dir}")
             
+            # Initialize build steps for the 5-step process
+            build_steps = [
+                BuildStep(
+                    id="step_1",
+                    name="Create App",
+                    description="Initializing project structure",
+                    status=BuildStepStatus.PENDING,
+                    progress=0
+                ),
+                BuildStep(
+                    id="step_2",
+                    name="Add Login & Signup",
+                    description="Creating authentication screens",
+                    status=BuildStepStatus.PENDING,
+                    progress=0
+                ),
+                BuildStep(
+                    id="step_3",
+                    name="Update index.tsx",
+                    description="Setting up navigation and routing",
+                    status=BuildStepStatus.PENDING,
+                    progress=0
+                ),
+                BuildStep(
+                    id="step_4",
+                    name="Add App Screens",
+                    description="Generating core app screens from prompt",
+                    status=BuildStepStatus.PENDING,
+                    progress=0
+                ),
+                BuildStep(
+                    id="step_5",
+                    name="Run Preview",
+                    description="Starting server and creating preview",
+                    status=BuildStepStatus.PENDING,
+                    progress=0
+                ),
+            ]
+            
             # Create Project instance
             project = Project(
                 id=project_id,
@@ -108,7 +147,8 @@ class ProjectManager:
                 preview_url=None,
                 error_message=None,
                 created_at=datetime.now(),
-                last_active=datetime.now()
+                last_active=datetime.now(),
+                build_steps=build_steps
             )
             
             # Track active project
@@ -477,6 +517,40 @@ web-build/
             if error_message:
                 project.error_message = error_message
             logger.info(f"Project {project_id} status updated to {status.value}")
+    
+    def update_build_step(
+        self,
+        project_id: str,
+        step_id: str,
+        status: BuildStepStatus,
+        progress: int = 0,
+        message: Optional[str] = None
+    ) -> None:
+        """
+        Update a specific build step
+        
+        Args:
+            project_id: Project identifier
+            step_id: Build step ID (step_1, step_2, etc.)
+            status: New step status
+            progress: Progress percentage (0-100)
+            message: Optional status message
+        """
+        project = self.active_projects.get(project_id)
+        if project:
+            for step in project.build_steps:
+                if step.id == step_id:
+                    step.status = status
+                    step.progress = progress
+                    step.message = message
+                    if status == BuildStepStatus.IN_PROGRESS and not step.started_at:
+                        step.started_at = datetime.now()
+                    if status in (BuildStepStatus.COMPLETED, BuildStepStatus.FAILED):
+                        step.completed_at = datetime.now()
+                    project.last_active = datetime.now()
+                    logger.info(f"Project {project_id} step {step_id} updated: {status.value} ({progress}%)")
+                    return
+            logger.warning(f"Build step {step_id} not found for project {project_id}")
     
     def update_preview_url(self, project_id: str, preview_url: str, port: Optional[int] = None) -> None:
         """

@@ -18,6 +18,40 @@ class ProjectStatus(Enum):
     ERROR = "error"
 
 
+class BuildStepStatus(Enum):
+    """Status of individual build steps"""
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+@dataclass
+class BuildStep:
+    """Represents a single step in the build process"""
+    id: str
+    name: str
+    description: str
+    status: BuildStepStatus
+    progress: int = 0  # 0-100
+    message: Optional[str] = None
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    
+    def to_dict(self) -> dict:
+        """Serialize to dictionary"""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "status": self.status.value,
+            "progress": self.progress,
+            "message": self.message,
+            "started_at": self.started_at.isoformat() if self.started_at else None,
+            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+        }
+
+
 @dataclass
 class TunnelURL:
     """Represents a tunnel URL with metadata"""
@@ -51,6 +85,7 @@ class Project:
     last_active: datetime = field(default_factory=datetime.now)
     preview_urls: List[str] = field(default_factory=list)  # Store all preview URLs (legacy)
     tunnel_urls: List[TunnelURL] = field(default_factory=list)  # Store all tunnel URLs with metadata
+    build_steps: List[BuildStep] = field(default_factory=list)  # Track build progress steps
     
     def to_dict(self) -> dict:
         """Serialize project to dictionary."""

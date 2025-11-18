@@ -916,7 +916,7 @@ async def generate(
         import random
         import string
         
-        # Step 2: Create project placeholder (for tracking)
+        # Step 1: Create project placeholder (for tracking)
         project = project_manager.create_project(
             user_id=sanitized_user_id,
             prompt=sanitized_prompt
@@ -924,7 +924,16 @@ async def generate(
         
         logger.info(f"✓ Created project {project.id}")
         
-        # Step 3: AI ANALYSIS PHASE - Comprehensive app structure analysis
+        # Update Step 1: Create App - IN PROGRESS
+        project_manager.update_build_step(
+            project.id,
+            "step_1",
+            models.project.BuildStepStatus.IN_PROGRESS,
+            progress=10,
+            message="Creating project structure..."
+        )
+        
+        # Step 2: AI ANALYSIS PHASE - Comprehensive app structure analysis
         project_manager.update_project_status(
             project.id,
             models.project.ProjectStatus.INITIALIZING
@@ -1103,6 +1112,24 @@ Generate ONLY the complete file content, no explanations."""
         logger.info(f"✅ CODE GENERATION COMPLETE - {len(created_files)} screens created")
         logger.info("=" * 80)
         
+        # Step 4: COMPLETED - App screens generated
+        project_manager.update_build_step(
+            project.id,
+            "step_4",
+            models.project.BuildStepStatus.COMPLETED,
+            progress=100,
+            message=f"{len(created_files)} app screens created"
+        )
+        
+        # Step 3: COMPLETED - Navigation will be set up by Expo Router automatically
+        project_manager.update_build_step(
+            project.id,
+            "step_3",
+            models.project.BuildStepStatus.COMPLETED,
+            progress=100,
+            message="Navigation configured with Expo Router"
+        )
+        
         # Apply template if specified
         if request.template_id:
             logger.info("")
@@ -1208,6 +1235,15 @@ export const supabase = createClient(
                 json.dump(app_json, f, indent=2)
             logger.info("✓ Updated app.json with Supabase configuration placeholders")
             logger.info("   ⚠️  Remember to update app.json 'extra' section with values from .env file")
+        
+        # Step 2: Add Login & Signup Screens - IN PROGRESS
+        project_manager.update_build_step(
+            project.id,
+            "step_2",
+            models.project.BuildStepStatus.IN_PROGRESS,
+            progress=10,
+            message="Generating authentication screens..."
+        )
         
         # Generate Login Screen
         logger.info("")
@@ -1627,6 +1663,15 @@ const styles = StyleSheet.create({
         created_files.append("app/signup.tsx")
         logger.info("   ✓ Signup screen created (app/signup.tsx)")
         
+        # Step 2: COMPLETED
+        project_manager.update_build_step(
+            project.id,
+            "step_2",
+            models.project.BuildStepStatus.COMPLETED,
+            progress=100,
+            message="Login and Signup screens created"
+        )
+        
         logger.info("")
         logger.info("=" * 80)
         logger.info("✅ SUPABASE AUTHENTICATION SETUP COMPLETE")
@@ -1637,7 +1682,16 @@ const styles = StyleSheet.create({
         logger.info("   3. Get these from: https://app.supabase.com > Settings > API")
         logger.info("=" * 80)
         
-        # Step 6: Setup preview (install deps, start server, create tunnel)
+        # Step 5: Run Preview - IN PROGRESS
+        project_manager.update_build_step(
+            project.id,
+            "step_5",
+            models.project.BuildStepStatus.IN_PROGRESS,
+            progress=10,
+            message="Setting up preview environment..."
+        )
+        
+        # Step 5: Setup preview (install deps, start server, create tunnel)
         logger.info("")
         logger.info("=" * 80)
         logger.info("🔧 PREVIEW SETUP PHASE")
@@ -1646,6 +1700,14 @@ const styles = StyleSheet.create({
         project_manager.update_project_status(
             project.id,
             models.project.ProjectStatus.INSTALLING_DEPS
+        )
+        
+        project_manager.update_build_step(
+            project.id,
+            "step_5",
+            models.project.BuildStepStatus.IN_PROGRESS,
+            progress=30,
+            message="Installing dependencies..."
         )
         
         logger.info("📦 Setting up shared dependencies...")
@@ -1657,6 +1719,14 @@ const styles = StyleSheet.create({
         project_manager.update_project_status(
             project.id,
             models.project.ProjectStatus.STARTING_SERVER
+        )
+        
+        project_manager.update_build_step(
+            project.id,
+            "step_5",
+            models.project.BuildStepStatus.IN_PROGRESS,
+            progress=60,
+            message="Starting Expo server..."
         )
         
         logger.info(f"🚀 Starting Expo server on port {project.port}...")
@@ -1672,6 +1742,14 @@ const styles = StyleSheet.create({
             models.project.ProjectStatus.CREATING_TUNNEL
         )
         
+        project_manager.update_build_step(
+            project.id,
+            "step_5",
+            models.project.BuildStepStatus.IN_PROGRESS,
+            progress=80,
+            message="Creating preview tunnel..."
+        )
+        
         logger.info("🌐 Creating ngrok tunnel...")
         preview_url = await tunnel_manager.create_tunnel(
             port=project.port,
@@ -1681,6 +1759,15 @@ const styles = StyleSheet.create({
         
         tunnel_created = True
         project_manager.update_preview_url(project.id, preview_url, port=project.port)
+        
+        # Step 5: COMPLETED
+        project_manager.update_build_step(
+            project.id,
+            "step_5",
+            models.project.BuildStepStatus.COMPLETED,
+            progress=100,
+            message=f"Preview ready at {preview_url}"
+        )
         
         # Step 7: Upload to Cloud Storage and clean up local files
         logger.info("")
@@ -1852,13 +1939,40 @@ async def get_status(
             detail="You don't have access to this project"
         )
     
+    # Get current step number (first in-progress or last completed)
+    current_step_num = None
+    if project.build_steps:
+        for idx, step in enumerate(project.build_steps, 1):
+            if step.status.value == "in_progress":
+                current_step_num = idx
+                break
+        if current_step_num is None:
+            # Find last completed step
+            for idx, step in enumerate(project.build_steps, 1):
+                if step.status.value == "completed":
+                    current_step_num = idx
+    
     return ProjectStatusResponse(
         project_id=project.id,
         status=project.status.value,
         preview_url=project.preview_url,
         error=project.error_message,
         created_at=project.created_at.isoformat(),
-        last_active=project.last_active.isoformat()
+        last_active=project.last_active.isoformat(),
+        build_steps=[
+            BuildStepResponse(
+                id=step.id,
+                name=step.name,
+                description=step.description,
+                status=step.status.value,
+                progress=step.progress,
+                message=step.message,
+                started_at=step.started_at.isoformat() if step.started_at else None,
+                completed_at=step.completed_at.isoformat() if step.completed_at else None
+            )
+            for step in (project.build_steps or [])
+        ],
+        current_step=current_step_num
     )
 
 
