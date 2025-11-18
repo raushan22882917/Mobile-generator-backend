@@ -1,11 +1,12 @@
 """
 Firebase Authentication Service
-Handles user authentication using Firebase Admin SDK
+Handles user authentication using Firebase Admin SDK and REST API
 """
 import os
 import logging
 from typing import Optional
 from datetime import datetime
+import httpx
 
 import firebase_admin
 from firebase_admin import credentials, auth
@@ -264,4 +265,86 @@ class AuthService:
             return None
         except Exception as e:
             logger.error(f"Unexpected error creating user: {e}")
+            return None
+    
+    def authenticate_user(self, email: str, password: str, api_key: str) -> Optional[dict]:
+        """
+        Authenticate user with email and password using Firebase REST API
+        
+        Args:
+            email: User email address
+            password: User password
+            api_key: Firebase Web API key (from Firebase project settings)
+            
+        Returns:
+            Dictionary with 'id_token' and 'user' if successful, None otherwise
+        """
+        if not api_key:
+            logger.error("Firebase API key not provided")
+            return None
+        
+        try:
+            # Use Firebase REST API to verify password
+            url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={api_key}"
+            
+            payload = {
+                "email": email,
+                "password": password,
+                "returnSecureToken": True
+            }
+            
+            # Make request to Firebase REST API
+            response = httpx.post(url, json=payload, timeout=10.0)
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                # Get ID token and user info
+                id_token = data.get("idToken")
+                local_id = data.get("localId")
+                email = data.get("email")
+                display_name = data.get("displayName")
+                
+                if id_token and local_id:
+                    # Verify the token using Admin SDK to get full user info
+                    try:
+                        decoded_token = auth.verify_id_token(id_token)
+                        firebase_user = auth.get_user(local_id)
+                        
+                        user = User(
+                            id=firebase_user.uid,
+                            email=firebase_user.email or email or '',
+                            password_hash="",  # Firebase handles passwords
+                            name=firebase_user.display_name or display_name,
+                            created_at=datetime.fromtimestamp(firebase_user.user_metadata.creation_timestamp / 1000) if firebase_user.user_metadata.creation_timestamp else datetime.now(),
+                            last_login=datetime.now(),
+                            is_active=not firebase_user.disabled
+                        )
+                        
+                        logger.info(f"User authenticated: {email} (UID: {local_id})")
+                        
+                        return {
+                            "id_token": id_token,
+                            "user": user
+                        }
+                    except Exception as e:
+                        logger.error(f"Error verifying token after authentication: {e}")
+                        return None
+                else:
+                    logger.warning("Firebase REST API response missing token or user ID")
+                    return None
+            else:
+                error_data = response.json() if response.content else {}
+                error_message = error_data.get("error", {}).get("message", "Authentication failed")
+                logger.warning(f"Firebase authentication failed: {error_message}")
+                return None
+                
+        except httpx.TimeoutException:
+            logger.error("Firebase authentication request timed out")
+            return None
+        except httpx.RequestError as e:
+            logger.error(f"Firebase authentication request error: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error during authentication: {e}")
             return None

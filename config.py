@@ -38,6 +38,10 @@ class Settings(BaseSettings):
         default="",
         description="Path to Firebase Admin SDK credentials JSON file (required for Firebase authentication)"
     )
+    firebase_api_key: str = Field(
+        default="",
+        description="Firebase Web API Key (required for password authentication via REST API). Get from Firebase Console > Project Settings > General > Web API Key"
+    )
     
     # Application Settings
     max_concurrent_projects: int = 10

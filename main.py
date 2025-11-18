@@ -624,13 +624,8 @@ async def login(request: LoginRequest):
     """
     User login endpoint
     
-    Note: Firebase requires password verification to happen on the client-side for security.
-    This endpoint checks if the user exists and provides guidance.
-    
-    For actual authentication:
-    1. Use Firebase Auth SDK on frontend: signInWithEmailAndPassword()
-    2. Get Firebase ID token: auth.currentUser.getIdToken()
-    3. Call /auth/verify with the token to complete authentication
+    Authenticates user with email and password using Firebase REST API.
+    Returns Firebase ID token and user information on success.
     """
     global auth_service
     if not auth_service:
@@ -639,11 +634,25 @@ async def login(request: LoginRequest):
             content={"success": False, "message": "Authentication service not initialized"}
         )
     
+    # Check if Firebase API key is configured
+    if not settings.firebase_api_key:
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "success": False,
+                "message": "Firebase API key not configured. Please set FIREBASE_API_KEY in environment variables."
+            }
+        )
+    
     try:
-        # Check if user exists in Firebase
-        user = auth_service.get_user_by_email(request.email)
+        # Authenticate user using Firebase REST API
+        auth_result = auth_service.authenticate_user(
+            email=request.email,
+            password=request.password,
+            api_key=settings.firebase_api_key
+        )
         
-        if not user:
+        if not auth_result:
             return JSONResponse(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 content={
@@ -652,33 +661,25 @@ async def login(request: LoginRequest):
                 }
             )
         
-        if not user.is_active:
+        id_token = auth_result.get("id_token")
+        user = auth_result.get("user")
+        
+        if not id_token or not user:
             return JSONResponse(
-                status_code=status.HTTP_401_UNAUTHORIZED,
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 content={
                     "success": False,
-                    "message": "User account is disabled"
+                    "message": "Authentication succeeded but failed to get token"
                 }
             )
         
-        # Note: Firebase Admin SDK cannot verify passwords directly (security feature)
-        # Password verification must happen client-side using Firebase Auth SDK
-        # This endpoint confirms user exists and is active
-        
-        logger.info(f"Login attempt for user: {user.email} (user exists and is active)")
+        logger.info(f"User logged in: {user.email}")
         
         return AuthResponse(
             success=True,
-            message="User found. Please use Firebase Auth SDK on frontend to sign in and get ID token, then call /auth/verify",
-            token=None,  # Token must be obtained from Firebase Auth SDK on frontend
-            user={
-                "id": user.id,
-                "email": user.email,
-                "name": user.name,
-                "created_at": user.created_at.isoformat(),
-                "last_login": user.last_login.isoformat() if user.last_login else None,
-                "is_active": user.is_active
-            }
+            message="Login successful",
+            token=id_token,
+            user=user.to_dict(include_password=False)
         )
         
     except Exception as e:

@@ -85,13 +85,13 @@ or
 
 ### 2. POST `/auth/login`
 
-**Purpose:** Check if user exists and is active (for login flow)
+**Purpose:** Authenticate user with email and password
 
 **Description:**
-- Checks if user exists in Firebase Auth
-- Verifies user account is active
-- **Important:** Firebase requires password verification to happen client-side for security
-- This endpoint confirms user exists, but actual authentication must use Firebase Auth SDK on frontend
+- Authenticates user using Firebase REST API
+- Verifies email and password credentials
+- Returns Firebase ID token and user information on success
+- Works entirely from backend - no frontend Firebase SDK required
 
 **Request:**
 - **Method:** `POST`
@@ -112,8 +112,8 @@ or
 ```json
 {
   "success": true,
-  "message": "User found. Please use Firebase Auth SDK on frontend to sign in and get ID token, then call /auth/verify",
-  "token": null,
+  "message": "Login successful",
+  "token": "firebase-id-token",
   "user": {
     "id": "firebase-uid",
     "email": "user@example.com",
@@ -157,15 +157,13 @@ or
 
 **Usage:**
 1. Frontend sends email and password to this endpoint
-2. Backend checks if user exists and is active
-3. **Frontend must then use Firebase Auth SDK** to actually authenticate:
-   ```javascript
-   const { user } = await signInWithEmailAndPassword(auth, email, password);
-   const idToken = await user.getIdToken();
-   ```
-4. Call `/auth/verify` with the ID token to complete authentication
+2. Backend authenticates with Firebase REST API
+3. Backend returns Firebase ID token and user information
+4. Frontend stores token and uses it for authenticated requests
 
-**Note:** This endpoint only verifies user existence. Actual password verification and token generation must happen on the frontend using Firebase Auth SDK for security reasons.
+**Configuration Required:**
+- Set `FIREBASE_API_KEY` environment variable
+- Get API key from: Firebase Console > Project Settings > General > Web API Key
 
 ---
 
