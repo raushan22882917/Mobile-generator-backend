@@ -73,17 +73,22 @@ async def generate_in_background(
 ):
     """Generate app in background and send updates via WebSocket"""
     try:
+        logger.info(f"Starting background generation for project {project_id}")
+        
         generator = await create_streaming_generator()
         
         async def send_progress(update: ProgressUpdate):
             """Send progress via WebSocket"""
-            await connection_manager.send_to_project(
-                project_id,
-                {
-                    "type": "progress",
-                    "data": update.to_dict()
-                }
-            )
+            try:
+                await connection_manager.send_to_project(
+                    project_id,
+                    {
+                        "type": "progress",
+                        "data": update.to_dict()
+                    }
+                )
+            except Exception as e:
+                logger.warning(f"Failed to send progress update via WebSocket: {e}")
         
         # Generate with fast mode (skip extra screens for speed)
         result = await generator.generate_with_streaming(
@@ -95,28 +100,48 @@ async def generate_in_background(
         )
         
         # Send completion
-        await connection_manager.send_to_project(
-            project_id,
-            {
-                "type": "complete",
-                "data": result
-            }
-        )
+        try:
+            await connection_manager.send_to_project(
+                project_id,
+                {
+                    "type": "complete",
+                    "data": result
+                }
+            )
+        except Exception as e:
+            logger.warning(f"Failed to send completion via WebSocket: {e}")
         
         logger.info(f"Background generation complete for {project_id}")
         
     except Exception as e:
-        logger.error(f"Background generation failed: {e}", exc_info=True)
-        await connection_manager.send_to_project(
-            project_id,
-            {
-                "type": "error",
-                "data": {
-                    "error": str(e),
-                    "message": str(e)
+        logger.error(f"Background generation failed for {project_id}: {e}", exc_info=True)
+        
+        # Update project status to error
+        try:
+            from main import project_manager
+            import models.project
+            project_manager.update_project_status(
+                project_id,
+                models.project.ProjectStatus.ERROR,
+                error_message=str(e)
+            )
+        except Exception as status_error:
+            logger.error(f"Failed to update project status to error: {status_error}")
+        
+        # Try to send error via WebSocket
+        try:
+            await connection_manager.send_to_project(
+                project_id,
+                {
+                    "type": "error",
+                    "data": {
+                        "error": str(e),
+                        "message": str(e)
+                    }
                 }
-            }
-        )
+            )
+        except Exception as ws_error:
+            logger.warning(f"Failed to send error via WebSocket: {ws_error}")
 
 
 @router.post("/fast-generate", response_model=FastGenerateResponse)
@@ -130,9 +155,10 @@ async def fast_generate(
     
     This endpoint:
     1. Validates input
-    2. Returns project_id immediately
-    3. Processes generation in background
-    4. Sends updates via WebSocket
+    2. Creates project placeholder
+    3. Returns project_id immediately
+    4. Processes generation in background
+    5. Sends updates via WebSocket
     
     Client should connect to WebSocket to receive updates.
     """
@@ -148,6 +174,69 @@ async def fast_generate(
     project_id = str(uuid.uuid4())
     
     logger.info(f"Fast generate initiated for project {project_id}")
+    
+    # Create project placeholder immediately so status can be tracked
+    from main import project_manager
+    import models.project
+    from datetime import datetime
+    from pathlib import Path
+    
+    # Create project with specific ID
+    project = models.project.Project(
+        id=project_id,
+        user_id=sanitized_user_id,
+        prompt=sanitized_prompt,
+        directory=str(Path(project_manager.base_dir) / project_id),
+        port=project_manager.port_manager.allocate_port(),
+        status=models.project.ProjectStatus.INITIALIZING,
+        created_at=datetime.now(),
+        last_active=datetime.now()
+    )
+    
+    # Initialize build steps (same as in project_manager.create_project)
+    from models.project import BuildStep, BuildStepStatus
+    project.build_steps = [
+        BuildStep(
+            id="step_1",
+            name="Create App",
+            description="Initializing project structure",
+            status=BuildStepStatus.PENDING,
+            progress=0
+        ),
+        BuildStep(
+            id="step_2",
+            name="Add Login & Signup",
+            description="Creating authentication screens",
+            status=BuildStepStatus.PENDING,
+            progress=0
+        ),
+        BuildStep(
+            id="step_3",
+            name="Update index.tsx",
+            description="Setting up navigation and routing",
+            status=BuildStepStatus.PENDING,
+            progress=0
+        ),
+        BuildStep(
+            id="step_4",
+            name="Add App Screens",
+            description="Generating app screens with dummy data",
+            status=BuildStepStatus.PENDING,
+            progress=0
+        ),
+        BuildStep(
+            id="step_5",
+            name="Setup Preview",
+            description="Installing dependencies and starting server",
+            status=BuildStepStatus.PENDING,
+            progress=0
+        ),
+    ]
+    
+    # Add to active projects
+    project_manager.active_projects[project_id] = project
+    
+    logger.info(f"Project {project_id} created and ready for background generation")
     
     # Start background generation
     background_tasks.add_task(

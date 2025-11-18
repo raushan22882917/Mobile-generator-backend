@@ -136,6 +136,12 @@ class StreamingGenerator:
                 15
             )
             
+            # Update status to GENERATING_CODE when we start creating the project
+            self.project_manager.update_project_status(
+                project_id,
+                models.project.ProjectStatus.GENERATING_CODE
+            )
+            
             # Create project with the provided project_id
             import models.project
             from datetime import datetime
@@ -157,6 +163,12 @@ class StreamingGenerator:
                     last_active=datetime.now()
                 )
                 self.project_manager.active_projects[project_id] = project
+            
+            # Update status to indicate we're starting generation
+            self.project_manager.update_project_status(
+                project_id,
+                models.project.ProjectStatus.INITIALIZING
+            )
             
             # Create Expo project with minimal template
             import os
@@ -194,6 +206,12 @@ class StreamingGenerator:
                 35
             )
             
+            # Update status to INSTALLING_DEPS when installing dependencies
+            self.project_manager.update_project_status(
+                project_id,
+                models.project.ProjectStatus.INSTALLING_DEPS
+            )
+            
             await self.command_executor.setup_expo_project(
                 project_dir=project.directory,
                 port=project.port,
@@ -206,6 +224,12 @@ class StreamingGenerator:
                 GenerationStage.STARTING_SERVER,
                 "Starting development server...",
                 45
+            )
+            
+            # Update status to STARTING_SERVER
+            self.project_manager.update_project_status(
+                project_id,
+                models.project.ProjectStatus.STARTING_SERVER
             )
             
             expo_process = await self.command_executor.start_expo_server(
@@ -221,6 +245,12 @@ class StreamingGenerator:
                 55
             )
             
+            # Update status to CREATING_TUNNEL
+            self.project_manager.update_project_status(
+                project_id,
+                models.project.ProjectStatus.CREATING_TUNNEL
+            )
+            
             preview_url = await self.tunnel_manager.create_tunnel(
                 port=project.port,
                 project_id=project.id
@@ -229,6 +259,12 @@ class StreamingGenerator:
             self.project_manager.update_preview_url(project.id, preview_url)
             
             # Stage 7: PREVIEW READY! (60%)
+            # Update status to READY when preview is available
+            self.project_manager.update_project_status(
+                project_id,
+                models.project.ProjectStatus.READY
+            )
+            
             await self._send_progress(
                 progress_callback,
                 GenerationStage.PREVIEW_READY,
@@ -296,6 +332,12 @@ class StreamingGenerator:
             )
             
             # Stage 11: Complete! (100%)
+            # Ensure status is READY
+            self.project_manager.update_project_status(
+                project_id,
+                models.project.ProjectStatus.READY
+            )
+            
             await self._send_progress(
                 progress_callback,
                 GenerationStage.COMPLETE,
