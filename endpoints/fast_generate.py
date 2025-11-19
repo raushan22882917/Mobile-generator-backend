@@ -5,7 +5,7 @@ Optimized endpoint that returns immediately and processes in background
 import asyncio
 import logging
 import uuid
-from fastapi import APIRouter, Depends, BackgroundTasks
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from typing import Optional
 
@@ -147,7 +147,6 @@ async def generate_in_background(
 @router.post("/fast-generate", response_model=FastGenerateResponse)
 async def fast_generate(
     request: FastGenerateRequest,
-    background_tasks: BackgroundTasks,
     api_key: str = Depends(verify_api_key)
 ):
     """
@@ -238,13 +237,16 @@ async def fast_generate(
     
     logger.info(f"Project {project_id} created and ready for background generation")
     
-    # Start background generation
-    background_tasks.add_task(
-        generate_in_background,
-        project_id,
-        sanitized_prompt,
-        sanitized_user_id,
-        request.template_id
+    # Start background generation using asyncio.create_task for better reliability
+    # BackgroundTasks may not be suitable for long-running tasks
+    import asyncio
+    asyncio.create_task(
+        generate_in_background(
+            project_id,
+            sanitized_prompt,
+            sanitized_user_id,
+            request.template_id
+        )
     )
     
     # Return immediately
