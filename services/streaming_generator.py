@@ -99,6 +99,10 @@ class StreamingGenerator:
         Returns:
             Final result dictionary
         """
+        # Import at the top to ensure it's available everywhere
+        import models.project
+        from datetime import datetime
+        
         try:
             # Stage 1: Quick analysis (5%)
             await self._send_progress(
@@ -136,15 +140,12 @@ class StreamingGenerator:
                 15
             )
             
+            # Create project with the provided project_id
             # Update status to GENERATING_CODE when we start creating the project
             self.project_manager.update_project_status(
                 project_id,
                 models.project.ProjectStatus.GENERATING_CODE
             )
-            
-            # Create project with the provided project_id
-            import models.project
-            from datetime import datetime
             
             # Get or create project
             existing_project = self.project_manager.get_project(project_id)
@@ -387,16 +388,15 @@ class StreamingGenerator:
             logger.error(f"Streaming generation failed: {e}", exc_info=True)
             
             # Update project status to error if project exists
-            if 'project' in locals() and project:
-                try:
-                    import models.project
-                    self.project_manager.update_project_status(
-                        project.id,
-                        models.project.ProjectStatus.ERROR,
-                        error_message=str(e)
-                    )
-                except Exception as status_error:
-                    logger.error(f"Failed to update project status: {status_error}")
+            try:
+                # Try to update status using project_id (project may not exist yet)
+                self.project_manager.update_project_status(
+                    project_id,
+                    models.project.ProjectStatus.ERROR,
+                    error_message=str(e)
+                )
+            except Exception as status_error:
+                logger.error(f"Failed to update project status: {status_error}")
             
             await self._send_progress(
                 progress_callback,
